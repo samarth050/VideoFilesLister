@@ -262,14 +262,16 @@ class FileListerApp:
         tk.Label(db_frame, textvariable=self.db_size_var,
          font=("Arial", 9)).pack(anchor="w")
         
+        tk.Button(parent, text="Export Statistics to Excel",
+          command=self.export_db_statistics_to_excel).pack(anchor="w", padx=6, pady=4)
+
+
         chart_frame = tk.LabelFrame(parent, text="Extension Distribution (DB)")
         chart_frame.pack(fill="both", expand=True, padx=6, pady=6)
 
         self.chart_canvas = None
         tk.Button(chart_frame, text="Refresh Pie Chart",
           command=self.draw_extension_pie_chart).pack(anchor="w", padx=4, pady=4)
-        tk.Button(parent, text="Export DB Statistics to Excel",
-          command=self.export_db_statistics_to_excel).pack(pady=6)
 
 
         self.chart_container = tk.Frame(chart_frame)
@@ -312,12 +314,24 @@ class FileListerApp:
 
             conn.close()
 
-            with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
-                summary_df.to_excel(writer, sheet_name="Summary", index=False)
-                stats_df.to_excel(writer, sheet_name="By Extension", index=False)
-                dup_df.to_excel(writer, sheet_name="Duplicates", index=False)
+            # Try preferred engine first, fallback if not installed
+            try:
+                writer = pd.ExcelWriter(path, engine="xlsxwriter")
+            except ModuleNotFoundError:
+                try:
+                    writer = pd.ExcelWriter(path, engine="openpyxl")
+                except Exception as e:
+                    messagebox.showerror("Error", f"No suitable Excel writer available: {e}")
+                    return
 
+            try:
+                with writer:
+                    summary_df.to_excel(writer, sheet_name="Summary", index=False)
+                    stats_df.to_excel(writer, sheet_name="By Extension", index=False)
+                    dup_df.to_excel(writer, sheet_name="Duplicates", index=False)
                 messagebox.showinfo("Success", "Statistics exported successfully")
+            except Exception as e:
+                messagebox.showerror("Error", f"Excel export failed: {e}")
 
         except Exception as e:
             messagebox.showerror("Error", f"Export failed: {e}")
