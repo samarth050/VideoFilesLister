@@ -27,6 +27,9 @@ import pandas as pd
 from pathlib import Path
 import datetime
 from collections import defaultdict
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
 class FileListerApp:
     CONFIG_FILE = "app_settings.json"
 
@@ -61,6 +64,8 @@ class FileListerApp:
         self._db_sort_reverse = {}
 
         self.setup_ui()
+        self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
+
 
         # Always use the one master DB
         self.current_db_path = self.master_db_path
@@ -116,6 +121,8 @@ class FileListerApp:
         self.notebook.add(main_tab, text="Files List")
         self.notebook.add(stats_tab, text="Statistics")
         self.notebook.add(db_tab, text="SQLite Viewer")
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
 
         self.setup_main_tab(main_tab)
         self.setup_stats_tab(stats_tab)
@@ -124,6 +131,14 @@ class FileListerApp:
         self.status_var = tk.StringVar()
         tk.Label(self.root, textvariable=self.status_var,
                  relief=tk.SUNKEN, bd=1, anchor="w").pack(fill="x", side="bottom")
+
+    def on_tab_changed(self, event):
+        if self.notebook.tab(self.notebook.select(), "text") == "Statistics":
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+            self.draw_extension_pie_chart()
+
+
     def setup_main_tab(self, parent):
         folder_frame = tk.Frame(parent)
         folder_frame.pack(fill="x", pady=5)
@@ -216,6 +231,218 @@ class FileListerApp:
 
         self.ext_tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
+
+        # -------- DATABASE STATISTICS ----------
+        db_frame = tk.LabelFrame(parent, text="Database Statistics")
+        db_frame.pack(fill="both", expand=True, padx=6, pady=6)
+
+        '''        self.db_total_records_var = tk.StringVar(value="DB Records: 0")
+        tk.Label(db_frame, textvariable=self.db_total_records_var,
+             font=("Arial", 10, "bold")).pack(anchor="w")
+        '''
+
+        db_cols = ("Extension", "Count", "Total Size")
+        self.db_ext_tree = ttk.Treeview(db_frame, columns=db_cols, show="headings")
+
+        for col in db_cols:
+            self.db_ext_tree.heading(col, text=col)
+            self.db_ext_tree.column(col, width=180)
+
+        db_scroll = ttk.Scrollbar(db_frame, command=self.db_ext_tree.yview)
+        self.db_ext_tree.configure(yscrollcommand=db_scroll.set)
+
+        self.db_ext_tree.pack(side="left", fill="both", expand=True)
+        db_scroll.pack(side="right", fill="y") 
+
+        self.db_total_records_var = tk.StringVar(value="DB Records: 0")
+        tk.Label(db_frame, textvariable=self.db_total_records_var,
+            font=("Arial", 10, "bold")).pack(anchor="w")
+
+        self.db_size_var = tk.StringVar(value="DB Size: 0 MB")
+        tk.Label(db_frame, textvariable=self.db_size_var,
+         font=("Arial", 9)).pack(anchor="w")
+        
+        chart_frame = tk.LabelFrame(parent, text="Extension Distribution (DB)")
+        chart_frame.pack(fill="both", expand=True, padx=6, pady=6)
+
+        self.chart_canvas = None
+        tk.Button(chart_frame, text="Refresh Pie Chart",
+          command=self.draw_extension_pie_chart).pack(anchor="w", padx=4, pady=4)
+        tk.Button(parent, text="Export DB Statistics to Excel",
+          command=self.export_db_statistics_to_excel).pack(pady=6)
+
+
+        self.chart_container = tk.Frame(chart_frame)
+        self.chart_container.pack(fill="both", expand=True)
+
+    def export_db_statistics_to_excel(self):
+        if not self.current_db_path:
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")]
+            )
+        if not path:
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+
+            stats_df = pd.read_sql_query("""
+                SELECT extension,
+                    COUNT(*) AS count,
+                    SUM(size_bytes) AS total_size_bytes
+                FROM Files
+                GROUP BY extension
+                ORDER BY extension
+             """, conn)
+
+            summary_df = pd.DataFrame([{
+                "Total Records": stats_df["count"].sum(),
+                "DB Size (MB)": round(os.path.getsize(self.current_db_path)/(1024*1024), 2)
+                }])
+
+            dup_df = pd.read_sql_query("""
+                SELECT file_name, size_bytes, COUNT(*) AS copies
+                FROM Files
+                GROUP BY file_name, size_bytes
+                HAVING copies > 1
+                """, conn)
+
+            conn.close()
+
+            with pd.ExcelWriter(path, engine="xlsxwriter") as writer:
+                summary_df.to_excel(writer, sheet_name="Summary", index=False)
+                stats_df.to_excel(writer, sheet_name="By Extension", index=False)
+                dup_df.to_excel(writer, sheet_name="Duplicates", index=False)
+
+                messagebox.showinfo("Success", "Statistics exported successfully")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
+
+
+    def draw_extension_pie_chart(self):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("""
+            SELECT extension, COUNT(*)
+            FROM Files
+            GROUP BY extension
+            """)
+            rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                return
+
+            labels = [r[0] for r in rows]
+            sizes = [r[1] for r in rows]
+
+            plt.close("all")  # prevent orphan figures
+            fig, ax = plt.subplots(figsize=(5, 4))
+
+            ax.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=140)
+            ax.set_title("Files by Extension")
+
+            if self.chart_canvas:
+                self.chart_canvas.get_tk_widget().destroy()
+
+            self.chart_canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
+            self.chart_canvas.draw()
+            self.chart_canvas.get_tk_widget().pack(fill="both", expand=True)
+
+        except Exception as e:
+            self.status_var.set(f"Chart error: {e}")
+
+
+    def update_db_statistics(self):
+        # Clear old rows
+        for i in self.db_ext_tree.get_children():
+            self.db_ext_tree.delete(i)
+
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            self.db_total_records_var.set("DB Records: 0")
+            self.db_size_var.set("DB Size: 0 MB")
+            return
+
+        try:
+            # DB size
+            size_mb = os.path.getsize(self.current_db_path) / (1024 * 1024)
+            self.db_size_var.set(f"DB Size: {size_mb:.2f} MB")
+
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            # Total records
+            cur.execute("SELECT COUNT(*) FROM Files")
+            total = cur.fetchone()[0]
+            self.db_total_records_var.set(f"DB Records: {total}")
+
+            # Per-extension stats
+            cur.execute("""
+                SELECT extension,
+                   COUNT(*) AS cnt,
+                   SUM(size_bytes) AS total_size
+                FROM Files
+                GROUP BY extension
+                ORDER BY extension
+                """)
+            rows = cur.fetchall()
+            conn.close()
+
+            for ext, cnt, size in rows:
+                self.db_ext_tree.insert(
+                    "", "end",
+                    values=(ext, cnt, self.format_size(size))
+                    )
+
+        except Exception as e:
+            self.db_total_records_var.set("DB Records: Error")
+            self.db_size_var.set("DB Size: Error")
+            self.status_var.set(f"DB stats error: {e}")
+
+
+    def update_status_bar_db_info(self):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM Files")
+            total = cur.fetchone()[0]
+            conn.close()
+
+            size_mb = os.path.getsize(self.current_db_path) / (1024 * 1024)
+            self.status_var.set(
+            f"DB Records: {total} | DB Size: {size_mb:.2f} MB"
+        )
+        except Exception:
+            pass
+
+    def on_app_close(self):
+        try:
+            # Destroy matplotlib canvas safely
+            if hasattr(self, "chart_canvas") and self.chart_canvas:
+                self.chart_canvas.get_tk_widget().destroy()
+                self.chart_canvas = None
+
+            # Close all matplotlib figures
+            try:
+                import matplotlib.pyplot as plt
+                plt.close("all")
+            except Exception:
+                pass
+
+        finally:
+            # Destroy Tk window
+            self.root.destroy()
+
     # ---------------- File scanning ----------------
     def browse_folder(self):
         folder = filedialog.askdirectory()
@@ -479,6 +706,8 @@ class FileListerApp:
             # Save as last DB
             self.save_settings({"last_db_path": db_path})
             self.current_db_path = db_path
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
 
             messagebox.showinfo("Success", "Database updated successfully.")
 
@@ -540,6 +769,7 @@ class FileListerApp:
         self.current_db_path = db_path
         self.save_settings({"last_db_path": db_path})
         self.load_db_records()
+
     def load_db_records(self):
         if not self.current_db_path:
             return
@@ -570,13 +800,19 @@ class FileListerApp:
         self.current_page = 0
         self.show_db_page(0)
         self.status_var.set(f"Loaded {len(rows)} rows from {self.current_db_path}")
+        self.update_db_statistics()
+        self.update_status_bar_db_info()
+
     def refresh_db_tree(self, rows):
         for i in self.db_tree.get_children():
             self.db_tree.delete(i)
         display = []
-        for r in rows:
+        # Compute sequential numbering based on current page
+        start = self.current_page * self.page_size if hasattr(self, "current_page") and hasattr(self, "page_size") else 0
+        for idx, r in enumerate(rows):
             id_, fname, ext, sizeb, cdate, path = r
-            display.append((id_, fname, ext, self.format_size(sizeb), self.format_date(cdate), path))
+            seq_no = start + idx + 1
+            display.append((seq_no, fname, ext, self.format_size(sizeb), self.format_date(cdate), path))
         for d in display:
             self.db_tree.insert("", "end", values=d)
         self.auto_resize_columns(display)
@@ -709,11 +945,23 @@ class FileListerApp:
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
             for i in sel:
-                rid = self.db_tree.item(i)["values"][0]
+                # Map the selected tree item to the underlying DB id using current_page_rows
+                try:
+                    idx = self.db_tree.index(i)
+                    rid = int(self.current_page_rows[idx][0])
+                except Exception:
+                    # Fallback: try reading displayed value (older behavior)
+                    try:
+                        rid = int(self.db_tree.item(i)["values"][0])
+                    except Exception:
+                        continue
                 cur.execute("DELETE FROM Files WHERE id=?", (rid,))
             conn.commit()
             conn.close()
             self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
             messagebox.showinfo("Success", "Deleted selected rows")
         except Exception as e:
             messagebox.showerror("Error", f"Delete failed: {e}")
@@ -731,6 +979,9 @@ class FileListerApp:
             conn.commit()
             conn.close()
             self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
             messagebox.showinfo("Success", "All rows deleted")
         except Exception as e:
             messagebox.showerror("Error", f"Delete all failed: {e}")
