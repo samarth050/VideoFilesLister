@@ -62,6 +62,8 @@ class FileListerApp:
         self.current_page = 0
         self.total_pages = 0
         self._db_sort_reverse = {}
+        self.storage_id_var = tk.StringVar(value="UNKNOWN")
+
 
         self.setup_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -87,10 +89,47 @@ class FileListerApp:
                 """)
             conn.commit()
             conn.close()
+            self.ensure_storage_id_column()
 
             # load at startup
             self.load_db_records()
+            
 
+    def ensure_storage_id_column(self):
+        """
+        Ensures that the Files table contains a storage_id column.
+        This method is SAFE to run multiple times.
+        """
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            # Get existing columns
+            cur.execute("PRAGMA table_info(Files)")
+            existing_columns = [row[1] for row in cur.fetchall()]
+
+            # Add storage_id if missing
+            if "storage_id" not in existing_columns:
+                cur.execute("ALTER TABLE Files ADD COLUMN storage_id TEXT")
+                cur.execute(
+                    "UPDATE Files SET storage_id = 'UNKNOWN' WHERE storage_id IS NULL"
+                )
+                conn.commit()
+
+                self.status_var.set(
+                "Database upgraded: storage_id column added"
+                )
+
+            conn.close()
+
+        except Exception as e:
+                messagebox.showerror(
+                "Database Upgrade Error",
+                f"Failed to upgrade database schema:\n{e}"
+                )
 
     def load_settings(self):
         if os.path.exists(self.CONFIG_FILE):
@@ -159,6 +198,13 @@ class FileListerApp:
 
         tk.Button(opt_frame, text="List Files", command=self.list_files).pack(side="right")
 
+        tk.Button(
+                opt_frame,
+                text="Update Storage ID from Scan",
+                command=self.update_storage_id_from_scan
+            ).pack(side="right")
+
+
         # Split list + details
         split = tk.Frame(parent)
         split.pack(fill="both", expand=True)
@@ -204,8 +250,33 @@ class FileListerApp:
         bottom = tk.Frame(parent)
         bottom.pack(fill="x", pady=10)
 
+        storage_frame = tk.Frame(parent)
+        storage_frame.pack(fill="x", padx=5, pady=3)
+
+        tk.Label(storage_frame, text="Storage ID:").pack(side="left")
+
+        self.storage_id_entry = tk.Entry(
+            storage_frame,
+            textvariable=self.storage_id_var,
+            width=25
+        )
+        self.storage_id_entry.pack(side="left", padx=5)
+
+
+        tk.Label(
+            storage_frame,
+            text="(e.g. HDD_MEDIA_01)",
+            fg="gray"
+        ).pack(side="left")
+
         tk.Button(bottom, text="Export to Excel", command=self.export_to_excel).pack(side="right")
         tk.Button(bottom, text="Export to SQLite", command=self.export_to_sqlite).pack(side="right", padx=5)
+    
+    def get_storage_id(self):
+        value = self.storage_id_var.get().strip()
+        return value if value else "UNKNOWN"
+
+
     def setup_stats_tab(self, parent):
         summary = tk.Frame(parent)
         summary.pack(fill="x", pady=5)
@@ -289,7 +360,7 @@ class FileListerApp:
         tk.Button(top, text="Delete Selected Duplicate",
               command=self.delete_selected_duplicate).pack(side="left", padx=4)
 
-        cols = ("ID", "File Name", "Size", "Full Path")#, "Storage ID")
+        cols = ("ID", "File Name", "Size", "Storage ID", "Full Path")
         self.dup_tree = ttk.Treeview(parent, columns=cols, show="headings")
 
         for c in cols:
@@ -309,7 +380,7 @@ class FileListerApp:
             cur = conn.cursor()
 
             cur.execute("""
-                SELECT id, file_name, size_bytes, full_path
+                SELECT id, file_name, size_bytes, storage_id, full_path
                 FROM Files
                 WHERE (file_name, size_bytes) IN (
                     SELECT file_name, size_bytes
@@ -323,15 +394,38 @@ class FileListerApp:
             rows = cur.fetchall()
             conn.close()
 
-            for rid, name, size, path in rows:
+            for rid, name, size,storage,path in rows:
                 self.dup_tree.insert(
                     "", "end",
-                    values=(rid, name, self.format_size(size), path)
+                    values=(rid, name, self.format_size(size), storage, path)
                 )
             self.status_var.set(f"Duplicate records found: {len(rows)}")
 
         except Exception as e:
             self.status_var.set(f"Duplicate scan error: {e}")
+
+    def ensure_global_unique_index(self):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("""
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_global
+            ON Files (file_name, size_bytes)
+            """)
+
+            conn.commit()
+            conn.close()
+
+            self.status_var.set("Global uniqueness enforced (file name + size)")
+
+        except Exception as e:
+            messagebox.showerror(
+                "Database Error",
+                f"Failed to enforce uniqueness:\n{e}"
+            )
 
     def delete_selected_duplicate(self):
         sel = self.dup_tree.selection()
@@ -759,7 +853,69 @@ class FileListerApp:
         except Exception as e:
             messagebox.showerror("Error", f"Excel export failed: {e}")
 
+    def update_storage_id_from_scan(self):
+        if not self.current_db_path or not self.all_files_info:
+            messagebox.showwarning(
+                "No Data",
+                "Scan files first before updating Storage ID."
+            )
+            return
+
+        storage_id = self.get_storage_id()
+
+        if storage_id == "UNKNOWN":
+            messagebox.showwarning(
+                "Invalid Storage ID",
+                "Please enter a valid Storage ID."
+            )
+            return
+
+        updated = 0
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            for f in self.all_files_info:
+                if f["extension"].lower() not in self.allowed_video_exts:
+                    continue
+
+                cur.execute("""
+                    UPDATE Files
+                    SET storage_id = ?
+                    WHERE file_name = ?
+                    AND size_bytes = ?
+                    AND storage_id = 'UNKNOWN'
+                """, (
+                    storage_id,
+                    f["name_without_ext"],
+                    f["size"]
+                ))
+
+                updated += cur.rowcount
+
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo(
+                "Storage ID Updated",
+                f"Storage ID '{storage_id}' assigned to {updated} record(s)."
+            )
+
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+        except Exception as e:
+            messagebox.showerror(
+                "Update Error",
+                f"Failed to update Storage ID:\n{e}"
+            )
+
+    
     def export_to_sqlite(self):
+        if hasattr(self, "storage_id_entry"):
+            self.storage_id_entry.config(state="disabled")
+
         if not self.all_files_info:
             messagebox.showinfo("Info", "No files to export.")
             return
@@ -782,23 +938,30 @@ class FileListerApp:
                     """)
 
             insert_q = """
-                INSERT OR IGNORE INTO Files 
-                (file_name, extension, size_bytes, creation_date, full_path)
-                VALUES (?, ?, ?, ?, ?)
-                    """
+                INSERT INTO Files
+                (file_name, extension, size_bytes, creation_date, full_path, storage_id)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """
+
+            storage_id = self.get_storage_id()
 
             for f in self.all_files_info:
-            # only insert video files
                 if f["extension"].lower() not in self.allowed_video_exts:
                     continue
 
-                cur.execute(insert_q, (
-                    f["name_without_ext"],
-                    f["extension"],
-                    f["size"],
-                    self.format_date(f["creation_date"]),
-                    f["full_path"]
-                        ))
+                try:
+                    cur.execute(insert_q, (
+                        f["name_without_ext"],
+                        f["extension"],
+                        f["size"],
+                        self.format_date(f["creation_date"]),
+                        f["full_path"],
+                        storage_id
+                    ))
+                except sqlite3.IntegrityError:
+                    # duplicate (same file_name + size)
+                    pass
+
 
             conn.commit()
             conn.close()
@@ -813,6 +976,12 @@ class FileListerApp:
 
         except Exception as e:
                messagebox.showerror("Error", f"SQLite export failed: {e}")
+        finally: 
+            if hasattr(self, "storage_id_entry"):
+                self.storage_id_entry.config(state="normal")
+
+
+                   
 
 
     def setup_db_viewer_tab(self, parent):
@@ -902,6 +1071,8 @@ class FileListerApp:
         self.status_var.set(f"Loaded {len(rows)} rows from {self.current_db_path}")
         self.update_db_statistics()
         self.update_status_bar_db_info()
+        self.ensure_storage_id_column()
+
 
     def refresh_db_tree(self, rows):
         for i in self.db_tree.get_children():
