@@ -117,16 +117,18 @@ class FileListerApp:
         main_tab = ttk.Frame(self.notebook)
         stats_tab = ttk.Frame(self.notebook)
         db_tab = ttk.Frame(self.notebook)
-
+        dup_tab = ttk.Frame(self.notebook)
         self.notebook.add(main_tab, text="Files List")
         self.notebook.add(stats_tab, text="Statistics")
         self.notebook.add(db_tab, text="SQLite Viewer")
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
-
+        self.notebook.add(dup_tab, text="Duplicates")
 
         self.setup_main_tab(main_tab)
         self.setup_stats_tab(stats_tab)
-        self.setup_db_viewer_tab(db_tab)
+        self.setup_db_viewer_tab(db_tab)    
+        self.setup_duplicates_tab(dup_tab)
+
 
         self.status_var = tk.StringVar()
         tk.Label(self.root, textvariable=self.status_var,
@@ -276,6 +278,90 @@ class FileListerApp:
 
         self.chart_container = tk.Frame(chart_frame)
         self.chart_container.pack(fill="both", expand=True)
+
+    def setup_duplicates_tab(self, parent):
+        top = tk.Frame(parent)
+        top.pack(fill="x", padx=5, pady=5)
+
+        tk.Button(top, text="Scan Duplicates",
+                  command=self.load_duplicate_records).pack(side="left", padx=4)
+
+        tk.Button(top, text="Delete Selected Duplicate",
+              command=self.delete_selected_duplicate).pack(side="left", padx=4)
+
+        cols = ("ID", "File Name", "Size", "Full Path")#, "Storage ID")
+        self.dup_tree = ttk.Treeview(parent, columns=cols, show="headings")
+
+        for c in cols:
+            self.dup_tree.heading(c, text=c)
+            self.dup_tree.column(c, width=220)
+
+        self.dup_tree.pack(fill="both", expand=True, padx=5, pady=5)
+
+    def load_duplicate_records(self):
+        if not self.current_db_path:
+            return
+
+        for i in self.dup_tree.get_children():
+                self.dup_tree.delete(i)
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT id, file_name, size_bytes, full_path
+                FROM Files
+                WHERE (file_name, size_bytes) IN (
+                    SELECT file_name, size_bytes
+                    FROM Files
+                    GROUP BY file_name, size_bytes
+                    HAVING COUNT(*) > 1
+                    )
+                ORDER BY file_name, size_bytes
+                """)
+
+            rows = cur.fetchall()
+            conn.close()
+
+            for rid, name, size, path in rows:
+                self.dup_tree.insert(
+                    "", "end",
+                    values=(rid, name, self.format_size(size), path)
+                )
+            self.status_var.set(f"Duplicate records found: {len(rows)}")
+
+        except Exception as e:
+            self.status_var.set(f"Duplicate scan error: {e}")
+
+    def delete_selected_duplicate(self):
+        sel = self.dup_tree.selection()
+        if not sel:
+            return
+
+        if not messagebox.askyesno(
+            "Confirm",
+            "Delete selected duplicate record(s)?\n(This does NOT delete the file)"
+            ):
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            for item in sel:
+                record_id = self.dup_tree.item(item, "values")[0]
+                cur.execute("DELETE FROM Files WHERE id = ?", (record_id,))
+                self.dup_tree.delete(item)
+
+            conn.commit()
+            conn.close()
+
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Delete failed: {e}")
+
+
 
     def export_db_statistics_to_excel(self):
         if not self.current_db_path:
