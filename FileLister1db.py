@@ -34,6 +34,54 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+class ExportDialog:
+    def __init__(self, parent, options):
+        self.result = None
+
+        self.top = tk.Toplevel(parent)
+        self.top.title("Export Options")
+        self.top.transient(parent)
+        self.top.grab_set()
+        self.top.resizable(False, False)
+
+        ttk.Label(
+            self.top,
+            text="Select export type:",
+            font=("Segoe UI", 10, "bold")
+        ).pack(padx=12, pady=(12, 6))
+
+        self.var = tk.StringVar(value=options[0])
+
+        for opt in options:
+            ttk.Radiobutton(
+                self.top,
+                text=opt,
+                variable=self.var,
+                value=opt
+            ).pack(anchor="w", padx=20, pady=2)
+
+        btn_frame = ttk.Frame(self.top)
+        btn_frame.pack(pady=12)
+
+        ttk.Button(btn_frame, text="Export", command=self.on_ok).pack(side="left", padx=6)
+        ttk.Button(btn_frame, text="Cancel", command=self.on_cancel).pack(side="left", padx=6)
+
+        self.top.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        # center dialog
+        self.top.update_idletasks()
+        x = parent.winfo_rootx() + 100
+        y = parent.winfo_rooty() + 100
+        self.top.geometry(f"+{x}+{y}")
+
+    def on_ok(self):
+        self.result = self.var.get()
+        self.top.destroy()
+
+    def on_cancel(self):
+        self.result = None
+        self.top.destroy()
+
 FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS Files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
