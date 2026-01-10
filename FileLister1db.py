@@ -532,6 +532,10 @@ class FileListerApp:
         tk.Label(db_frame, textvariable=self.db_total_records_var,
             font=("Arial", 10, "bold")).pack(anchor="w")
 
+        self.db_files_size_var = tk.StringVar(value="Total Files Size: 0 MB")
+        tk.Label(db_frame, textvariable=self.db_files_size_var,
+            font=("Arial", 9, "bold")).pack(anchor="w")
+
         self.db_size_var = tk.StringVar(value="DB Size: 0 MB")
         tk.Label(db_frame, textvariable=self.db_size_var,
          font=("Arial", 9)).pack(anchor="w")
@@ -550,6 +554,17 @@ class FileListerApp:
 
         self.chart_container = tk.Frame(chart_frame)
         self.chart_container.pack(fill="both", expand=True)
+
+    def format_db_total_size(self, size_bytes):
+        try:
+            size = int(size_bytes or 0)
+        except:
+            return "0 MB"
+
+        if size >= 1024**4:  # 1024 GB = 1 TB
+            return f"{size / (1024**4):.2f} TB"
+        else:
+            return f"{size / (1024**2):.2f} MB"
 
     def setup_duplicates_tab(self, parent):
         top = tk.Frame(parent)
@@ -767,6 +782,7 @@ class FileListerApp:
         if not self.current_db_path or not os.path.exists(self.current_db_path):
             self.db_total_records_var.set("DB Records: 0")
             self.db_size_var.set("DB Size: 0 MB")
+            self.db_files_size_var.set("Total Files Size: 0 MB")
             return
 
         try:
@@ -782,6 +798,15 @@ class FileListerApp:
             cur.execute("SELECT COUNT(*) FROM Files")
             total = cur.fetchone()[0]
             self.db_total_records_var.set(f"DB Records: {total}")
+
+            # Total size of ALL files in DB
+            cur.execute("SELECT IFNULL(SUM(size_bytes),0) FROM Files")
+            total_bytes = cur.fetchone()[0]
+
+            formatted = self.format_db_total_size(total_bytes)
+            self.db_files_size_var.set(
+                f"Total Files Size: {formatted}"# ({total_bytes:,} bytes)" #Include if size required in bytes
+            )
 
             # Per-extension stats
             cur.execute("""
