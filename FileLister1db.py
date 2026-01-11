@@ -1233,15 +1233,16 @@ class FileListerApp:
             if hasattr(self, "storage_id_entry"):
                 self.storage_id_entry.config(state="normal")
 
-
-                   
-
+             
 
     def setup_db_viewer_tab(self, parent):
         top = tk.Frame(parent)
         top.pack(fill="x", pady=6)
 
         tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db).pack(side="left", padx=4)
+        tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)\
+            .pack(side="left", padx=6)
+
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
         tk.Entry(top, textvariable=self.db_search_var, width=40).pack(side="left", padx=4)
@@ -1292,6 +1293,278 @@ class FileListerApp:
         self.save_settings({"last_db_path": db_path})
         self.ensure_global_unique_index()
         self.load_db_records()
+
+    def verify_db_vs_disk(self):
+
+        if not self.current_db_path:
+            messagebox.showwarning("No DB", "Open a database first.")
+            return
+
+        storage_id = self.select_storage_id_dialog()
+        if not storage_id:
+            return
+
+        scan_root = filedialog.askdirectory(
+            title="Select root folder of this physical disk"
+        )
+        if not scan_root:
+            return
+
+        # ---- Scan disk: filename -> [(path, size)] ----
+        disk_files = {}
+
+        for root, _, files in os.walk(scan_root):
+            for f in files:
+                full = os.path.join(root, f)
+                try:
+                    disk_files.setdefault(f.lower(), []).append(
+                        (full, os.path.getsize(full))
+                    )
+                except:
+                    pass
+
+        # ---- Load DB rows for selected storage id ----
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, file_name, extension, size_bytes, full_path
+            FROM Files
+            WHERE storage_id = ?
+        """, (storage_id,))
+
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
+            messagebox.showinfo("Not found", "No records for this storage ID.")
+            return
+
+        problems = []
+
+        for rid, name, ext, sizeb, old_path in rows:
+            fname = f"{name}{ext or ''}".lower()
+
+            if fname not in disk_files:
+                problems.append((rid, fname, sizeb, old_path, "Missing on disk"))
+            else:
+                match = False
+                for real_path, real_size in disk_files[fname]:
+                    if real_size == sizeb:
+                        match = True
+                        break
+                if not match:
+                    problems.append((rid, fname, sizeb, old_path,
+                                    "Found by name, size mismatch"))
+
+        if not problems:
+            messagebox.showinfo("Verification Complete",
+                                "No discrepancies found for this disk.")
+            return
+
+        self.show_db_disk_problems(problems, disk_files, storage_id, scan_root)
+  
+    def show_db_disk_problems(self, problems, disk_files, storage_id, scan_root):
+
+        win = tk.Toplevel(self.root)
+        win.title("DB vs Disk Verification")
+        win.geometry("1200x520")
+
+        tk.Label(win,
+                text=f"Storage ID: {storage_id}   |   Scan root: {scan_root}   |   Problems: {len(problems)}",
+                font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=10, pady=6)
+
+        cols = ("ID", "File", "DB Size", "DB Path", "Problem")
+        tree = ttk.Treeview(win, columns=cols, show="headings")
+
+        for c in cols:
+            tree.heading(c, text=c)
+            tree.column(c, width=230)
+
+        tree.pack(fill="both", expand=True, padx=6, pady=6)
+
+        for row in problems:
+            tree.insert("", "end", values=row)
+
+        btns = tk.Frame(win)
+        btns.pack(fill="x", pady=6)
+
+        tk.Button(btns, text="Auto-fix path",
+                command=lambda: self.fix_by_filename(tree, disk_files))\
+            .pack(side="left", padx=6)
+
+        tk.Button(btns, text="Edit path manually",
+                command=lambda: self.edit_selected_path(tree))\
+            .pack(side="left", padx=6)
+
+        tk.Button(btns, text="Delete DB record",
+                fg="white", bg="darkred",
+                command=lambda: self.delete_selected_problem(tree, win))\
+            .pack(side="right", padx=10)
+
+
+    def fix_by_filename(self, tree, disk_files):
+
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning("Select", "Select at least one record.")
+            return
+
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+        fixed = 0
+
+        for item in sel:
+            rid, fname, sizeb, _, _ = tree.item(item, "values")
+            fname = fname.lower()
+
+            if fname not in disk_files:
+                continue
+
+            for real_path, real_size in disk_files[fname]:
+                if real_size == int(sizeb):
+                    cur.execute("UPDATE Files SET full_path=? WHERE id=?",
+                                (real_path, rid))
+                    tree.delete(item)
+                    fixed += 1
+                    break
+
+        conn.commit()
+        conn.close()
+
+        self.load_db_records()
+        messagebox.showinfo("Auto-fix", f"Paths updated: {fixed}")
+   
+
+    def relocate_selected_file(self, tree):
+        sel = tree.selection()
+        if not sel:
+            messagebox.showwarning("Select", "Select a row first.")
+            return
+
+        folder = filedialog.askdirectory(title="Select root folder to search")
+        if not folder:
+            return
+
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+
+        fixed = 0
+
+        for item in sel:
+            rid, name, sizeb, old_path, _ = tree.item(item, "values")
+            name = str(name).lower()
+
+            for root, _, files in os.walk(folder):
+                for f in files:
+                    if os.path.splitext(f)[0].lower() == name:
+                        full = os.path.join(root, f)
+                        try:
+                            if os.path.getsize(full) == int(sizeb):
+                                cur.execute(
+                                    "UPDATE Files SET full_path=? WHERE id=?",
+                                    (full, rid)
+                                )
+                                fixed += 1
+                                tree.delete(item)
+                                raise StopIteration
+                        except Exception:
+                            pass
+            try:
+                raise StopIteration
+            except StopIteration:
+                pass
+
+        conn.commit()
+        conn.close()
+
+        self.load_db_records()
+        messagebox.showinfo("Relocate Done", f"Updated paths: {fixed}")
+
+    def edit_selected_path(self, tree):
+        sel = tree.selection()
+        if not sel:
+            return
+
+        item = sel[0]
+        rid, name, sizeb, old_path, _ = tree.item(item, "values")
+
+        new = filedialog.askopenfilename(title="Select correct file")
+        if not new:
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            cur.execute("UPDATE Files SET full_path=? WHERE id=?", (new, rid))
+            conn.commit()
+            conn.close()
+
+            tree.delete(item)
+            self.load_db_records()
+
+        except Exception as e:
+            messagebox.showerror("Update failed", str(e))
+
+    def delete_selected_problem(self, tree, win):
+        sel = tree.selection()
+        if not sel:
+            return
+
+        if not messagebox.askyesno("Confirm", "Delete selected DB records?"):
+            return
+
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+
+        for item in sel:
+            rid = tree.item(item, "values")[0]
+            cur.execute("DELETE FROM Files WHERE id=?", (rid,))
+            tree.delete(item)
+
+        conn.commit()
+        conn.close()
+        self.load_db_records()
+        if not tree.get_children():
+            win.destroy()
+        
+    def select_storage_id_dialog(self):
+        """Show dropdown of unique storage_ids from DB and return selected one"""
+
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+        cur.execute("SELECT DISTINCT storage_id FROM Files ORDER BY storage_id")
+        ids = [row[0] for row in cur.fetchall()]
+        conn.close()
+
+        if not ids:
+            messagebox.showwarning("No Storage IDs", "No storage IDs found in database.")
+            return None
+
+        win = tk.Toplevel(self.root)
+        win.title("Select Storage ID")
+        win.geometry("320x130")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="Select Storage ID to verify:").pack(pady=8)
+
+        var = tk.StringVar(value=ids[0])
+        combo = ttk.Combobox(win, textvariable=var, values=ids, state="readonly", width=32)
+        combo.pack(pady=5)
+
+        result = {"value": None}
+
+        def confirm():
+            result["value"] = var.get()
+            win.destroy()
+
+        tk.Button(win, text="OK", width=12, command=confirm).pack(pady=10)
+
+        win.wait_window()
+        return result["value"]
+
 
     def load_db_records(self):
         if not self.current_db_path:
