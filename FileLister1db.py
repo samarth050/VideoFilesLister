@@ -125,6 +125,16 @@ class FileListerApp:
             ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".divx"
         }
 
+        self.known_video_exts = {
+            ".mp4", ".mkv", ".avi", ".mov", ".mpg", ".mpeg", ".wmv", ".flv",
+            ".webm", ".m4v", ".3gp", ".ts", ".divx",
+
+            # other common video formats (not yet supported but detectable)
+            ".rmvb", ".rm", ".vob", ".mts", ".m2ts", ".ogv", ".f4v",
+            ".asf", ".mxf", ".roq", ".nsv"
+        }
+
+
         self._font = tkfont.nametofont("TkDefaultFont")
 
         # File data stores
@@ -317,85 +327,238 @@ class FileListerApp:
         return value if value else "UNKNOWN"
 
     def show_unmatched_scanned_files(self):
-        if not self.current_db_path or not self.all_files_info:
-            messagebox.showwarning("No Data", "Scan files first.")
+        if not self.folder_path.get():
+            messagebox.showwarning("Warning", "Please select a folder first.")
             return
 
-        conn = sqlite3.connect(self.current_db_path)
-        cur = conn.cursor()
-        
+        scanned_files = self.get_files_info(self.folder_path.get())
+
+        if not scanned_files:
+            messagebox.showinfo("Info", "No video files found in selected path.")
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+        except Exception as e:
+            messagebox.showerror("Database Error", str(e))
+            return
+
+        current_sid = self.get_storage_id()
         unmatched = []
 
-        for f in self.all_files_info:
+        for f in scanned_files:
             cur.execute("""
-                SELECT storage_id FROM Files
-                WHERE file_name = ? AND size_bytes = ?
-            """, (f["name_without_ext"], f["size"]))
+                SELECT size_bytes, full_path, storage_id
+                FROM Files
+                WHERE file_name = ?
+            """, (f["name_without_ext"],))
 
-            row = cur.fetchone()
+            rows = cur.fetchall()
 
-            if row:
-                continue  # matched, skip
+            if rows:
+                same_storage_exact = False
+                same_storage_path_mismatch = False
+                other_storage_exact = False
+                size_mismatch = False
 
-            else:
-                if f["extension"].lower() not in self.allowed_video_exts:
-                    reason = "Extension not tracked"
+                for db_size, db_path, db_sid in rows:
+                    if db_size == f["size"]:
+                        if db_sid == current_sid:
+                            same_storage_exact = True
+                            if os.path.normcase(db_path) != os.path.normcase(f["full_path"]):
+                                same_storage_path_mismatch = True
+                        else:
+                            other_storage_exact = True
+                    else:
+                        size_mismatch = True
+
+                # ---- classification ----
+                if same_storage_exact and not same_storage_path_mismatch:
+                    continue  # perfectly in sync for this storage
+
+                if same_storage_exact and same_storage_path_mismatch:
+                    reason = "Exists in DB (same storage, path changed)"
+                elif other_storage_exact:
+                    reason = "Exists in DB (different storage)"
+                elif size_mismatch:
+                    reason = "Name match, size mismatch"
                 else:
                     reason = "Not present in database"
+
+            else:
+                reason = "Not present in database"
 
             unmatched.append((f, reason))
 
         conn.close()
 
         if not unmatched:
-            messagebox.showinfo("Result", "No unmatched scanned files found.")
+            messagebox.showinfo(
+                "Result",
+                "No unmatched video files found.\nDisk and database are in sync for this storage."
+            )
             return
 
         self._show_unmatched_window(unmatched)
 
+
     def _show_unmatched_window(self, files):
-        row_file_map = {}
-
         win = tk.Toplevel(self.root)
-        win.title("Unmatched Scanned Files")
-        win.geometry("900x400")
-        count_lbl = tk.Label(
-            win,
-            text=f"Unmatched scanned files: {len(files)}",
-            font=("Segoe UI", 10, "bold"),
-            anchor="w"
-        )
-        count_lbl.pack(fill="x", padx=10, pady=(8, 4))
+        win.title("Unmatched Video Files")
+        win.geometry("1120x600")
+        win.transient(self.root)
+        win.grab_set()
 
-        cols = ("Name", "Size","Reason", "Path")
-        tree = ttk.Treeview(win, columns=cols, show="headings")
+        # ---------- Summary ----------
+        from collections import Counter
+        reason_counts = Counter([r for _, r in files])
+        summary_text = "   |   ".join([f"{k}: {v}" for k, v in reason_counts.items()])
+
+        tk.Label(
+            win, text=summary_text,
+            fg="darkblue", font=("Segoe UI", 9, "bold")
+        ).pack(anchor="w", padx=10, pady=(8, 2))
+
+        # ---------- Filter ----------
+        filter_frame = tk.Frame(win)
+        filter_frame.pack(fill="x", padx=10, pady=4)
+
+        tk.Label(filter_frame, text="Filter:").pack(side="left")
+
+        reasons = ["ALL"] + sorted(reason_counts.keys())
+        reason_var = tk.StringVar(value="ALL")
+
+        combo = ttk.Combobox(
+            filter_frame, values=reasons,
+            state="readonly", textvariable=reason_var, width=40
+        )
+        combo.pack(side="left", padx=6)
+
+        # ---------- Table ----------
+        cols = ("Name", "Size", "Reason", "Full Path")
+        tree = ttk.Treeview(win, columns=cols, show="headings", selectmode="extended")
+        tree.pack(fill="both", expand=True, padx=10, pady=6)
 
         for c in cols:
             tree.heading(c, text=c)
-            tree.column(c, width=300)
+            tree.column(c, anchor="w")
 
-        tree.pack(fill="both", expand=True)
+        tree.column("Name", width=240)
+        tree.column("Size", width=100, anchor="e")
+        tree.column("Reason", width=260)
+        tree.column("Full Path", width=520)
 
-        for f, reason in files:
-            iid = tree.insert("", "end", values=(
-                f["name_without_ext"],
-                self.format_size(f["size"]),
-                reason,
-                f["full_path"]
-            ))
-            row_file_map[iid] = f
+        row_file_map = {}
+
+        def populate(selected="ALL"):
+            tree.delete(*tree.get_children())
+            row_file_map.clear()
+
+            for f, reason in files:
+                if selected != "ALL" and reason != selected:
+                    continue
+
+                iid = tree.insert("", "end", values=(
+                    f["name_without_ext"],
+                    self.format_size(f["size"]),
+                    reason,
+                    f["full_path"]
+                ))
+                row_file_map[iid] = (f, reason)
+
+        populate()
+        combo.bind("<<ComboboxSelected>>", lambda e: populate(reason_var.get()))
+
+        # ---------- Buttons ----------
         btn_frame = tk.Frame(win)
-        btn_frame.pack(fill="x", pady=5)
+        btn_frame.pack(fill="x", padx=10, pady=6)
 
-        tk.Button(
-            btn_frame,
-            text="FORCE Insert Selected Files",
-            fg="white",
-            bg="darkred",
-            command=lambda: self.force_insert_selected_files(
-                tree, row_file_map, win
-            )
-        ).pack(side="right", padx=10)
+        tk.Button(btn_frame, text="Force Insert Selected", command=lambda: force_insert()).pack(side="left")
+        tk.Button(btn_frame, text="Open Location", command=lambda: open_location()).pack(side="left", padx=6)
+        tk.Button(btn_frame, text="Close", command=win.destroy).pack(side="right")
+
+        # ---------- Helpers ----------
+        def open_location():
+            sel = tree.selection()
+            if not sel:
+                return
+            f, _ = row_file_map.get(sel[0])
+            os.startfile(os.path.dirname(f["full_path"]))
+
+        def force_insert():
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("Warning", "Select files first.")
+                return
+
+            # ---- safety confirmations ----
+            reasons = {row_file_map[i][1] for i in sel}
+
+            if "Exists in DB, path changed" in reasons:
+                if not messagebox.askyesno(
+                    "Confirm",
+                    "Some files already exist in DB but with different paths.\n"
+                    "This will create additional records.\n\nContinue?"
+                ):
+                    return
+
+            if "Name match, size mismatch" in reasons:
+                if not messagebox.askyesno(
+                    "Confirm",
+                    "Some files have same name but different size.\n"
+                    "This usually means replaced or modified videos.\n\nInsert anyway?"
+                ):
+                    return
+
+            try:
+                conn = sqlite3.connect(self.current_db_path)
+                cur = conn.cursor()
+
+                inserted = 0
+                for iid in sel:
+                    f, _ = row_file_map[iid]
+
+                    cur.execute("""
+                        INSERT OR IGNORE INTO Files
+                        (file_name, extension, size_bytes, storage_id, creation_date, full_path)
+                        VALUES (?, ?, ?, ?, ?, ?)
+                    """, (
+                        f["name_without_ext"],
+                        f["extension"],
+                        f["size"],
+                        self.get_storage_id(),
+                        f["creation_date"],
+                        f["full_path"]
+                    ))
+
+                    if cur.rowcount:
+                        inserted += 1
+
+                conn.commit()
+                conn.close()
+
+            except Exception as e:
+                messagebox.showerror("Database Error", str(e))
+                return
+
+            messagebox.showinfo("Completed", f"{inserted} file(s) inserted.")
+            win.destroy()
+            self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+        # ---------- Double click open ----------
+        def on_double_click(event):
+            item = tree.identify_row(event.y)
+            if not item:
+                return
+            f, _ = row_file_map[item]
+            os.startfile(f["full_path"])
+
+        tree.bind("<Double-1>", on_double_click)
+
+
 
     def force_insert_selected_files(self, tree, row_file_map, parent_win):
         selected = tree.selection()
@@ -914,56 +1077,76 @@ class FileListerApp:
         # clear details
         for v in self.detail_vars.values():
             v.set("")
+
     def get_files_info(self, folder):
         results = []
+
+        # ---- include subfolders ----
         if self.include_subdirs.get():
             for root, _, files in os.walk(folder):
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
+
+                    # only allowed video files
                     if ext not in self.allowed_video_exts:
                         continue
+
                     path = os.path.join(root, f)
+
                     try:
                         size = os.path.getsize(path)
-                    except OSError:
-                        size = 0
-                    try:
-                        c = os.path.getctime(path)
-                        cdate = datetime.datetime.fromtimestamp(c)
+                        cdate = datetime.datetime.fromtimestamp(
+                            os.path.getctime(path)
+                        ).strftime("%Y-%m-%d %H:%M:%S")
                     except Exception:
-                        cdate = datetime.datetime.now()
+                        continue
+
                     results.append({
                         "name_without_ext": os.path.splitext(f)[0],
                         "full_path": path,
                         "extension": ext,
                         "size": size,
-                        "creation_date": cdate
+                        "creation_date": cdate,
+                        "tracked": True
                     })
+
+        # ---- only selected folder ----
         else:
-            for f in os.listdir(folder):
-                path = os.path.join(folder, f)
-                if not os.path.isfile(path):
-                    continue
-                ext = os.path.splitext(f)[1].lower()
-                if ext not in self.allowed_video_exts:
-                    continue
-                try:
-                    size = os.path.getsize(path)
-                except OSError:
-                    size = 0
-                try:
-                    c = os.path.getctime(path)
-                    cdate = datetime.datetime.fromtimestamp(c)
-                except Exception:
-                    cdate = datetime.datetime.now()
-                results.append({
-                    "name_without_ext": os.path.splitext(f)[0],
-                    "full_path": path,
-                    "extension": ext,
-                    "size": size,
-                    "creation_date": cdate
-                })
+            try:
+                for f in os.listdir(folder):
+                    path = os.path.join(folder, f)
+                    if not os.path.isfile(path):
+                        continue
+
+                    ext = os.path.splitext(f)[1].lower()
+
+                    # only allowed video files
+                    if ext not in self.allowed_video_exts:
+                        continue
+
+                    try:
+                        size = os.path.getsize(path)
+                        cdate = datetime.datetime.fromtimestamp(
+                            os.path.getctime(path)
+                        ).strftime("%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        continue
+
+                    results.append({
+                        "name_without_ext": os.path.splitext(f)[0],
+                        "full_path": path,
+                        "extension": ext,
+                        "size": size,
+                        "creation_date": cdate,
+                        "tracked": True
+                    })
+            except Exception:
+                pass
+
         return results
+ 
+    
+    
     def update_statistics(self):
         for item in self.ext_tree.get_children():
             self.ext_tree.delete(item)
@@ -1139,7 +1322,7 @@ class FileListerApp:
             
 
             for f in self.all_files_info:
-                if f["extension"].lower() not in self.allowed_video_exts:
+                if not f.get("tracked", True):
                     continue
 
                 cur.execute("""
