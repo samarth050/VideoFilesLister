@@ -122,7 +122,7 @@ class FileListerApp:
         # Allowed video types
         self.allowed_video_exts = {
             ".mp4", ".mkv", ".avi", ".mov", ".mpg", ".mpeg",
-            ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts"
+            ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".divx"
         }
 
         self._font = tkfont.nametofont("TkDefaultFont")
