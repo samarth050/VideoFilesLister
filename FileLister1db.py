@@ -495,13 +495,21 @@ class FileListerApp:
             # ---- safety confirmations ----
             reasons = {row_file_map[i][1] for i in sel}
 
-            if "Exists in DB, path changed" in reasons:
+            if "Exists in DB (same storage, path changed)" in reasons:
                 if not messagebox.askyesno(
                     "Confirm",
                     "Some files already exist in DB but with different paths.\n"
                     "This will create additional records.\n\nContinue?"
                 ):
                     return
+            if "Exists in DB (different storage)" in reasons:
+                if not messagebox.askyesno(
+                    "Confirm",
+                    "Some files already exist in DB under different storage IDs.\n"
+                    "This will create additional records.\n\nContinue?"
+                ):
+                    return
+              
 
             if "Name match, size mismatch" in reasons:
                 if not messagebox.askyesno(
@@ -1498,6 +1506,9 @@ class FileListerApp:
 
         for root, _, files in os.walk(scan_root):
             for f in files:
+                ext = os.path.splitext(f)[1].lower()
+                if ext not in self.allowed_video_exts:
+                    continue
                 full = os.path.join(root, f)
                 try:
                     disk_files.setdefault(f.lower(), []).append(
@@ -1931,7 +1942,7 @@ class FileListerApp:
         vals = self.db_tree.item(item, "values")
         if not vals:
             return
-        path = vals[5] if len(vals) > 5 else None
+        path = vals[6] if len(vals) > 6 else None
         if path and os.path.exists(path):
             self.open_file(path)
         else:
