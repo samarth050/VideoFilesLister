@@ -26,6 +26,7 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 import pandas as pd
 from pathlib import Path
 import datetime
+import re
 from collections import defaultdict
 try:
     import matplotlib.pyplot as plt
@@ -85,26 +86,41 @@ class ExportDialog:
 FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS Files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+
     file_name TEXT NOT NULL,
-    extension TEXT,
+    extension TEXT NOT NULL,
     size_bytes INTEGER NOT NULL,
+
     storage_id TEXT NOT NULL,
+    full_path TEXT NOT NULL,
     creation_date TEXT,
-    full_path TEXT,
+
+    year INTEGER,
+    category TEXT,
+
+    added_on TEXT DEFAULT CURRENT_TIMESTAMP,
+    file_hash TEXT,
+
     UNIQUE(file_name, size_bytes)
 );
 """
+FILES_TABLE_INDEX = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_global
+ON Files (file_name, size_bytes);
+"""
+CATEGORIES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS Categories (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL
+);
+"""
+
+
 DB_SELECT_ALL = """
-SELECT
-    id,
-    file_name,
-    extension,
-    size_bytes,
-    storage_id,
-    creation_date,
-    full_path
+SELECT id, file_name, extension, size_bytes, storage_id,
+       creation_date, full_path, year, category
 FROM Files
-ORDER BY id DESC;
+ORDER BY id DESC
 """
 
 class FileListerApp:
@@ -145,7 +161,7 @@ class FileListerApp:
         self.current_db_path = None
         self.db_records_cache = []
         self.all_filtered_rows = []
-        self.current_page_rows = []
+        #self.current_page_rows = []
         self.page_size = 50
         self.current_page = 0
         self.total_pages = 0
@@ -162,19 +178,18 @@ class FileListerApp:
 
         # Auto-create + load
         if not os.path.exists(self.master_db_path):
-            # create empty DB structure
-            conn = sqlite3.connect(self.master_db_path)
-            cur = conn.cursor()
-           
-            cur.execute(FILES_TABLE_SQL)
-            conn.commit()
-            conn.close()
-            self.ensure_global_unique_index()
-
-
-            # load at startup
+            self.init_db(fresh=True)
             self.load_db_records()
+
                 
+    def extract_year_from_filename(self, filename):
+        matches = re.findall(r'(19\d{2}|20\d{2})', filename)
+        if matches:
+            year = int(matches[0])
+            if 1900 <= year <= 2099:
+                return year
+        return None
+
     def load_settings(self):
         if os.path.exists(self.CONFIG_FILE):
             try:
@@ -349,47 +364,38 @@ class FileListerApp:
 
         for f in scanned_files:
             cur.execute("""
-                SELECT size_bytes, full_path, storage_id
+                SELECT id, size_bytes, full_path, storage_id
                 FROM Files
-                WHERE file_name = ?
-            """, (f["name_without_ext"],))
+                WHERE file_name=? AND size_bytes=?
+            """, (f["name_without_ext"], f["size"]))
 
-            rows = cur.fetchall()
+            row = cur.fetchone()
 
-            if rows:
-                same_storage_exact = False
-                same_storage_path_mismatch = False
-                other_storage_exact = False
-                size_mismatch = False
+            if row:
+                db_id, db_size, db_path, db_sid = row
 
-                for db_size, db_path, db_sid in rows:
-                    if db_size == f["size"]:
-                        if db_sid == current_sid:
-                            same_storage_exact = True
-                            if os.path.normcase(db_path) != os.path.normcase(f["full_path"]):
-                                same_storage_path_mismatch = True
-                        else:
-                            other_storage_exact = True
+                if db_sid == current_sid:
+                    if os.path.normcase(db_path) != os.path.normcase(f["full_path"]):
+                        reason = "Movie moved (update path/storage)"
+                        unmatched.append((f, reason, db_id))
                     else:
-                        size_mismatch = True
+                        continue  # perfectly in sync
 
-                # ---- classification ----
-                if same_storage_exact and not same_storage_path_mismatch:
-                    continue  # perfectly in sync for this storage
+                else:
+                    reason = "Duplicate video on another storage (waste)"
+                    unmatched.append((f, reason, db_id))
 
-                if same_storage_exact and same_storage_path_mismatch:
-                    reason = "Exists in DB (same storage, path changed)"
-                elif other_storage_exact:
-                    reason = "Exists in DB (different storage)"
-                elif size_mismatch:
+            else:
+                # check if same name but different size exists
+                cur.execute("""
+                    SELECT 1 FROM Files WHERE file_name=?
+                """, (f["name_without_ext"],))
+                if cur.fetchone():
                     reason = "Name match, size mismatch"
                 else:
                     reason = "Not present in database"
 
-            else:
-                reason = "Not present in database"
-
-            unmatched.append((f, reason))
+                unmatched.append((f, reason, None))
 
         conn.close()
 
@@ -402,22 +408,19 @@ class FileListerApp:
 
         self._show_unmatched_window(unmatched)
 
-
     def _show_unmatched_window(self, files):
         win = tk.Toplevel(self.root)
         win.title("Unmatched Video Files")
-        win.geometry("1120x600")
+        win.geometry("1150x620")
         win.transient(self.root)
         win.grab_set()
 
-        # ---------- Summary ----------
         from collections import Counter
-        reason_counts = Counter([r for _, r in files])
+        reason_counts = Counter([r for _, r, _ in files])
         summary_text = "   |   ".join([f"{k}: {v}" for k, v in reason_counts.items()])
 
-        tk.Label(
-            win, text=summary_text,
-            fg="darkblue", font=("Segoe UI", 9, "bold")
+        tk.Label(win, text=summary_text,
+                fg="darkblue", font=("Segoe UI", 9, "bold")
         ).pack(anchor="w", padx=10, pady=(8, 2))
 
         # ---------- Filter ----------
@@ -429,10 +432,8 @@ class FileListerApp:
         reasons = ["ALL"] + sorted(reason_counts.keys())
         reason_var = tk.StringVar(value="ALL")
 
-        combo = ttk.Combobox(
-            filter_frame, values=reasons,
-            state="readonly", textvariable=reason_var, width=40
-        )
+        combo = ttk.Combobox(filter_frame, values=reasons,
+                            state="readonly", textvariable=reason_var, width=45)
         combo.pack(side="left", padx=6)
 
         # ---------- Table ----------
@@ -444,9 +445,9 @@ class FileListerApp:
             tree.heading(c, text=c)
             tree.column(c, anchor="w")
 
-        tree.column("Name", width=240)
+        tree.column("Name", width=260)
         tree.column("Size", width=100, anchor="e")
-        tree.column("Reason", width=260)
+        tree.column("Reason", width=320)
         tree.column("Full Path", width=520)
 
         row_file_map = {}
@@ -455,7 +456,7 @@ class FileListerApp:
             tree.delete(*tree.get_children())
             row_file_map.clear()
 
-            for f, reason in files:
+            for f, reason, db_id in files:
                 if selected != "ALL" and reason != selected:
                     continue
 
@@ -465,7 +466,7 @@ class FileListerApp:
                     reason,
                     f["full_path"]
                 ))
-                row_file_map[iid] = (f, reason)
+                row_file_map[iid] = (f, reason, db_id)
 
         populate()
         combo.bind("<<ComboboxSelected>>", lambda e: populate(reason_var.get()))
@@ -474,7 +475,7 @@ class FileListerApp:
         btn_frame = tk.Frame(win)
         btn_frame.pack(fill="x", padx=10, pady=6)
 
-        tk.Button(btn_frame, text="Force Insert Selected", command=lambda: force_insert()).pack(side="left")
+        tk.Button(btn_frame, text="Apply Action", command=lambda: apply_action()).pack(side="left")
         tk.Button(btn_frame, text="Open Location", command=lambda: open_location()).pack(side="left", padx=6)
         tk.Button(btn_frame, text="Close", command=win.destroy).pack(side="right")
 
@@ -483,64 +484,65 @@ class FileListerApp:
             sel = tree.selection()
             if not sel:
                 return
-            f, _ = row_file_map.get(sel[0])
+            f, _, _ = row_file_map.get(sel[0])
             os.startfile(os.path.dirname(f["full_path"]))
 
-        def force_insert():
+        def apply_action():
             sel = tree.selection()
             if not sel:
                 messagebox.showwarning("Warning", "Select files first.")
                 return
 
-            # ---- safety confirmations ----
             reasons = {row_file_map[i][1] for i in sel}
 
-            if "Exists in DB (same storage, path changed)" in reasons:
-                if not messagebox.askyesno(
-                    "Confirm",
-                    "Some files already exist in DB but with different paths.\n"
-                    "This will create additional records.\n\nContinue?"
-                ):
-                    return
-            if "Exists in DB (different storage)" in reasons:
-                if not messagebox.askyesno(
-                    "Confirm",
-                    "Some files already exist in DB under different storage IDs.\n"
-                    "This will create additional records.\n\nContinue?"
-                ):
-                    return
-              
-
-            if "Name match, size mismatch" in reasons:
-                if not messagebox.askyesno(
-                    "Confirm",
-                    "Some files have same name but different size.\n"
-                    "This usually means replaced or modified videos.\n\nInsert anyway?"
-                ):
-                    return
+            # 🚨 HARD BLOCK
+            if any("Duplicate video on another storage" in r for r in reasons):
+                messagebox.showerror(
+                    "Blocked",
+                    "Some selected files already exist on another storage.\n\n"
+                    "This represents duplicate storage waste and is NOT allowed."
+                )
+                return
 
             try:
                 conn = sqlite3.connect(self.current_db_path)
                 cur = conn.cursor()
 
                 inserted = 0
+                updated = 0
+
                 for iid in sel:
-                    f, _ = row_file_map[iid]
+                    f, reason, db_id = row_file_map[iid]
 
-                    cur.execute("""
-                        INSERT OR IGNORE INTO Files
-                        (file_name, extension, size_bytes, storage_id, creation_date, full_path)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (
-                        f["name_without_ext"],
-                        f["extension"],
-                        f["size"],
-                        self.get_storage_id(),
-                        f["creation_date"],
-                        f["full_path"]
-                    ))
+                    if reason == "Movie moved (update path/storage)":
+                        cur.execute("""
+                            UPDATE Files
+                            SET storage_id=?, full_path=?, creation_date=?
+                            WHERE id=?
+                        """, (
+                            self.get_storage_id(),
+                            f["full_path"],
+                            self.format_date(f["creation_date"]),
+                            db_id
+                        ))
+                        updated += 1
 
-                    if cur.rowcount:
+                    elif reason in ("Not present in database", "Name match, size mismatch"):
+                        cur.execute("""
+                            INSERT INTO Files
+                            (file_name, extension, size_bytes, storage_id,
+                            creation_date, full_path, year, category)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, (
+                            f["name_without_ext"],
+                            f["extension"],
+                            f["size"],
+                            self.get_storage_id(),
+                            self.format_date(f["creation_date"]),
+                            f["full_path"],
+                            f.get("year"),
+                            f.get("category")
+                        ))
                         inserted += 1
 
                 conn.commit()
@@ -550,7 +552,11 @@ class FileListerApp:
                 messagebox.showerror("Database Error", str(e))
                 return
 
-            messagebox.showinfo("Completed", f"{inserted} file(s) inserted.")
+            messagebox.showinfo(
+                "Completed",
+                f"Inserted: {inserted}\nUpdated (moved): {updated}"
+            )
+
             win.destroy()
             self.load_db_records()
             self.update_db_statistics()
@@ -561,91 +567,146 @@ class FileListerApp:
             item = tree.identify_row(event.y)
             if not item:
                 return
-            f, _ = row_file_map[item]
+            f, _, _ = row_file_map[item]
             os.startfile(f["full_path"])
 
         tree.bind("<Double-1>", on_double_click)
-
 
 
     def force_insert_selected_files(self, tree, row_file_map, parent_win):
         selected = tree.selection()
 
         if not selected:
-            messagebox.showwarning(
-                "No Selection",
-                "Please select one or more files to insert."
-            )
-            return
-
-        if not messagebox.askyesno(
-            "Expert Confirmation",
-            "This will INSERT selected files into the database.\n"
-            "Duplicates will be skipped.\n\nProceed?"
-        ):
+            messagebox.showwarning("No Selection", "Please select one or more files.")
             return
 
         storage_id = self.get_storage_id()
 
-        inserted = 0
-        skipped = 0
-
         try:
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
-                        
+
+            select_exact = """
+                SELECT id, storage_id, full_path
+                FROM Files
+                WHERE file_name=? AND size_bytes=?
+            """
+
+            select_name = """
+                SELECT 1 FROM Files WHERE file_name=?
+            """
+
             insert_q = """
                 INSERT INTO Files
-                (file_name, extension, size_bytes,storage_id, creation_date, full_path)
-                VALUES (?, ?, ?, ?, ?, ?)
+                (file_name, extension, size_bytes, storage_id,
+                creation_date, full_path, year, category)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """
+
+            update_q = """
+                UPDATE Files
+                SET storage_id=?, full_path=?, creation_date=?
+                WHERE id=?
+            """
+
+            inserted = 0
+            updated = 0
+            blocked = 0
+            skipped = 0
 
             for iid in selected:
                 f = row_file_map.get(iid)
                 if not f:
                     continue
 
-                try:
-                    
-                    cur.execute("""
-                        SELECT 1 FROM Files
-                        WHERE file_name=? AND size_bytes=?
-                    """, (f["name_without_ext"], f["size"]))
+                file_name = f["name_without_ext"]
+                size = f["size"]
+                full_path = f["full_path"]
+                creation_date = self.format_date(f["creation_date"])
+                year = f.get("year")
+                category = f.get("category")
 
-                    if cur.fetchone():
-                        skipped += 1
+                cur.execute(select_exact, (file_name, size))
+                row = cur.fetchone()
+
+                if row:
+                    db_id, db_sid, db_path = row
+
+                    if db_sid == storage_id:
+                        if os.path.normcase(db_path) != os.path.normcase(full_path):
+                            # 🔄 moved movie
+                            cur.execute(update_q, (
+                                storage_id,
+                                full_path,
+                                creation_date,
+                                db_id
+                            ))
+                            updated += 1
+                        else:
+                            skipped += 1
+                    else:
+                        # 🚨 waste duplicate
+                        blocked += 1
                         continue
-                    
+
+                else:
+                    # no exact match → check name collision
+                    cur.execute(select_name, (file_name,))
+                    # even if name exists with different size → allowed
                     cur.execute(insert_q, (
-                        f["name_without_ext"],
+                        file_name,
                         f["extension"],
-                        f["size"],
+                        size,
                         storage_id,
-                        self.format_date(f["creation_date"]),
-                        f["full_path"]
-                        ))
+                        creation_date,
+                        full_path,
+                        year,
+                        category
+                    ))
                     inserted += 1
-                except sqlite3.IntegrityError:
-                    skipped += 1  # duplicate (name + size)
 
             conn.commit()
             conn.close()
 
             messagebox.showinfo(
-                "Force Insert Complete",
-                f"Inserted: {inserted}\nSkipped (duplicates): {skipped}"
+                "Force Action Complete",
+                f"Inserted: {inserted}\n"
+                f"Updated (moved): {updated}\n"
+                f"Blocked (waste duplicates): {blocked}\n"
+                f"Skipped (already in sync): {skipped}"
             )
 
             parent_win.destroy()
-
+            self.load_db_records()
             self.update_db_statistics()
             self.update_status_bar_db_info()
 
         except Exception as e:
-            messagebox.showerror(
-                "Insert Error",
-                f"Failed to insert selected files:\n{e}"
-            )
+            messagebox.showerror("Insert Error", f"Operation failed:\n{e}")
+
+    def get_all_categories(self):
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT name FROM Categories ORDER BY name")
+            rows = cur.fetchall()
+            conn.close()
+            return [r[0] for r in rows]
+        except:
+            return []
+
+    def add_new_category(self, name):
+        if not name.strip():
+            return False
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("INSERT OR IGNORE INTO Categories(name) VALUES (?)", (name.strip(),))
+            conn.commit()
+            conn.close()
+            return True
+        except:
+            return False
 
     
 
@@ -814,6 +875,27 @@ class FileListerApp:
                 "Uniqueness Error",
                 f"Failed to ensure uniqueness:\n{e}"
             )
+
+    def init_db(self, fresh=False):
+        """
+        Initialize database.
+        fresh=True → drops Files and Categories tables and recreates them (CLEAN RESET).
+        """
+
+        conn = sqlite3.connect(self.master_db_path)
+        cur = conn.cursor()
+
+        if fresh:
+            cur.execute("DROP TABLE IF EXISTS Files")
+            cur.execute("DROP TABLE IF EXISTS Categories")
+
+        cur.execute(FILES_TABLE_SQL)
+        cur.execute(FILES_TABLE_INDEX)
+        cur.execute(CATEGORIES_TABLE_SQL)
+
+        conn.commit()
+        conn.close()
+
 
     def delete_selected_duplicate(self):
         sel = self.dup_tree.selection()
@@ -1089,6 +1171,40 @@ class FileListerApp:
     def get_files_info(self, folder):
         results = []
 
+        def process_file(path, f):
+            try:
+                size = os.path.getsize(path)
+                cdate = datetime.datetime.fromtimestamp(
+                    os.path.getctime(path)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return
+
+            name_without_ext = os.path.splitext(f)[0]
+            ext = os.path.splitext(f)[1].lower()
+
+            # extract year from filename (if present)
+            year = None
+            try:
+                matches = re.findall(r'(19\d{2}|20\d{2})', f)
+                if matches:
+                    y = int(matches[0])
+                    if 1900 <= y <= 2099:
+                        year = y
+            except Exception:
+                year = None
+
+            results.append({
+                "name_without_ext": name_without_ext,
+                "full_path": path,
+                "extension": ext,
+                "size": size,
+                "creation_date": cdate,
+                "year": year,          # NEW
+                "category": None,      # NEW (user editable later)
+                "tracked": True
+            })
+
         # ---- include subfolders ----
         if self.include_subdirs.get():
             for root, _, files in os.walk(folder):
@@ -1100,23 +1216,7 @@ class FileListerApp:
                         continue
 
                     path = os.path.join(root, f)
-
-                    try:
-                        size = os.path.getsize(path)
-                        cdate = datetime.datetime.fromtimestamp(
-                            os.path.getctime(path)
-                        ).strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        continue
-
-                    results.append({
-                        "name_without_ext": os.path.splitext(f)[0],
-                        "full_path": path,
-                        "extension": ext,
-                        "size": size,
-                        "creation_date": cdate,
-                        "tracked": True
-                    })
+                    process_file(path, f)
 
         # ---- only selected folder ----
         else:
@@ -1132,27 +1232,12 @@ class FileListerApp:
                     if ext not in self.allowed_video_exts:
                         continue
 
-                    try:
-                        size = os.path.getsize(path)
-                        cdate = datetime.datetime.fromtimestamp(
-                            os.path.getctime(path)
-                        ).strftime("%Y-%m-%d %H:%M:%S")
-                    except Exception:
-                        continue
+                    process_file(path, f)
 
-                    results.append({
-                        "name_without_ext": os.path.splitext(f)[0],
-                        "full_path": path,
-                        "extension": ext,
-                        "size": size,
-                        "creation_date": cdate,
-                        "tracked": True
-                    })
             except Exception:
                 pass
 
         return results
- 
     
     
     def update_statistics(self):
@@ -1173,6 +1258,7 @@ class FileListerApp:
             exts[x["extension"]]["size"] += x["size"]
         for ext, stats in sorted(exts.items()):
             self.ext_tree.insert("", "end", values=(ext, stats["count"], self.format_size(stats["size"])))
+
     def format_size(self, size_bytes):
         try:
             size = int(size_bytes or 0)
@@ -1234,6 +1320,7 @@ class FileListerApp:
                 subprocess.Popen(["xdg-open", path])
         except Exception as e:
             messagebox.showerror("Error", f"Cannot open file: {e}")
+
     def export_to_excel(self):
         if not self.all_filtered_rows:
             messagebox.showinfo("Info", "No records to export.")
@@ -1268,7 +1355,8 @@ class FileListerApp:
             elif dlg.result == "Complete File Information":
                 rows = []
                 for r in self.all_filtered_rows:
-                    id_, fname, ext, sizeb, storage_id, cdate, path_ = r
+                    id_, fname, ext, sizeb, storage_id, cdate, path_, year, category = r
+
                     rows.append({
                         "File Name": fname,
                         "Extension": ext,
@@ -1276,12 +1364,16 @@ class FileListerApp:
                         "Size": self.format_size(sizeb),
                         "Storage ID": storage_id,
                         "Creation Date": self.format_date(cdate),
-                        "Full Path": path_
+                        "Full Path": path_,
+                        "Year": year if year else "",
+                        "Category": category if category else ""
                     })
+
                 df = pd.DataFrame(rows)
 
             else:  # Extension Statistics
                 stats = defaultdict(lambda: {"count": 0, "size": 0})
+
                 for r in self.all_filtered_rows:
                     ext = r[2]
                     sizeb = r[3]
@@ -1303,6 +1395,7 @@ class FileListerApp:
 
         except Exception as e:
             messagebox.showerror("Error", f"Excel export failed:\n{e}")
+
 
 
     def update_storage_id_from_scan(self):
@@ -1364,7 +1457,6 @@ class FileListerApp:
                 f"Failed to update Storage ID:\n{e}"
             )
 
-    
     def export_to_sqlite(self):
         if hasattr(self, "storage_id_entry"):
             self.storage_id_entry.config(state="disabled")
@@ -1379,60 +1471,186 @@ class FileListerApp:
             conn = sqlite3.connect(db_path)
             cur = conn.cursor()
 
+            # Ensure table & indexes exist (updated schema)
             cur.execute(FILES_TABLE_SQL)
+            cur.execute(FILES_TABLE_INDEX)
+            cur.execute(CATEGORIES_TABLE_SQL)
+
             storage_id = self.get_storage_id()
+
+            select_q = """
+                SELECT id, storage_id, full_path
+                FROM Files
+                WHERE file_name=? AND size_bytes=?
+            """
 
             insert_q = """
                 INSERT INTO Files
-                (file_name, extension, size_bytes,storage_id, creation_date, full_path)
-                VALUES (?, ?, ?, ?, ?, ?)
-                """
-          
+                (file_name, extension, size_bytes, storage_id,
+                creation_date, full_path, year, category)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """
+
+            update_q = """
+                UPDATE Files
+                SET storage_id=?, full_path=?, creation_date=?
+                WHERE id=?
+            """
+
+            new_count = 0
+            moved_count = 0
+            waste_duplicates = 0
 
             for f in self.all_files_info:
                 if f["extension"].lower() not in self.allowed_video_exts:
                     continue
 
-                try:
-                    cur.execute(insert_q, (
-                        f["name_without_ext"],
-                        f["extension"],
-                        f["size"],
-                        storage_id,
-                        self.format_date(f["creation_date"]),
-                        f["full_path"]
-                    ))
-                except sqlite3.IntegrityError:
-                    # duplicate (same file_name + size)
-                    pass
+                file_name = f["name_without_ext"]
+                size = f["size"]
+                full_path = f["full_path"]
+                creation_date = self.format_date(f["creation_date"])
+                year = f.get("year")
+                category = f.get("category")
 
+                cur.execute(select_q, (file_name, size))
+                row = cur.fetchone()
+
+                if row is None:
+                    # ✅ Brand new movie
+                    cur.execute(insert_q, (
+                        file_name,
+                        f["extension"],
+                        size,
+                        storage_id,
+                        creation_date,
+                        full_path,
+                        year,
+                        category
+                    ))
+                    new_count += 1
+
+                else:
+                    db_id, db_storage, db_path_existing = row
+
+                    if db_storage == storage_id:
+                        if db_path_existing != full_path:
+                            # 🔄 Movie moved
+                            cur.execute(update_q, (
+                                storage_id,
+                                full_path,
+                                creation_date,
+                                db_id
+                            ))
+                            moved_count += 1
+                    else:
+                        # 🚨 Waste duplicate on another storage
+                        waste_duplicates += 1
+                        # Do NOT insert, do NOT update
 
             conn.commit()
             conn.close()
 
-            # Save as last DB
             self.save_settings({"last_db_path": db_path})
             self.current_db_path = db_path
             self.update_db_statistics()
             self.update_status_bar_db_info()
 
-            messagebox.showinfo("Success", "Database updated successfully.")
+            messagebox.showinfo(
+                "Export complete",
+                f"New movies added: {new_count}\n"
+                f"Moved movies updated: {moved_count}\n"
+                f"Duplicate waste detected: {waste_duplicates}"
+            )
 
         except Exception as e:
-               messagebox.showerror("Error", f"SQLite export failed: {e}")
-        finally: 
+            messagebox.showerror("Error", f"SQLite export failed: {e}")
+
+        finally:
             if hasattr(self, "storage_id_entry"):
                 self.storage_id_entry.config(state="normal")
 
-             
+    def open_bulk_category_editor(self):
+        if not self.current_db_path:
+            messagebox.showwarning("No Database", "Please open a database first.")
+            return
+
+        sel = self.db_tree.selection()
+        if not sel:
+            messagebox.showwarning("No Selection", "Select one or more records first.")
+            return
+
+        win = tk.Toplevel(self.root)
+        win.title("Assign Category")
+        win.geometry("420x220")
+        win.transient(self.root)
+        win.grab_set()
+
+        tk.Label(win, text="Select or Enter Category", font=("Segoe UI", 10, "bold")).pack(pady=8)
+
+        categories = self.get_all_categories()
+        cat_var = tk.StringVar()
+
+        combo = ttk.Combobox(win, values=categories, textvariable=cat_var, width=35)
+        combo.pack(pady=4)
+
+        tk.Label(win, text="(You can select from list or type a new one)").pack(pady=(2,8))
+
+        def save():
+            final_cat = cat_var.get().strip()
+
+            if not final_cat:
+                messagebox.showwarning("Missing", "Please select or enter a category.")
+                return
+
+            final_cat = final_cat.title()
+            self.add_new_category(final_cat)
+
+            ids = [self.db_tree.item(i)["tags"][0] for i in sel]
+
+            try:
+                conn = sqlite3.connect(self.current_db_path)
+                cur = conn.cursor()
+                cur.executemany(
+                    "UPDATE Files SET category=? WHERE id=?",
+                    [(final_cat, i) for i in ids]
+                )
+                conn.commit()
+                conn.close()
+            except Exception as e:
+                messagebox.showerror("DB Error", str(e))
+                return
+
+            self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+            messagebox.showinfo("Updated", f"Category '{final_cat}' applied to {len(ids)} records.")
+            win.destroy()
+
+        btnf = tk.Frame(win)
+        btnf.pack(pady=14)
+
+        tk.Button(btnf, text="Apply", width=12, command=save).pack(side="left", padx=8)
+        tk.Button(btnf, text="Cancel", width=12, command=win.destroy).pack(side="left")
+
+
+    def on_db_tree_click(self, event):
+        if self.db_tree.identify_region(event.x, event.y) == "heading":
+            col = self.db_tree.identify_column(event.x)
+            col_name = self.db_tree["columns"][int(col.replace("#",""))-1]
+            self.sort_db_by_column(col_name)
 
     def setup_db_viewer_tab(self, parent):
         top = tk.Frame(parent)
         top.pack(fill="x", pady=6)
 
+        tk.Button(top, text="Recreate DB (Clean)",
+            command=self.recreate_database).pack(side="left", padx=6)
+
         tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db).pack(side="left", padx=4)
         tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)\
             .pack(side="left", padx=6)
+        tk.Button(top, text="Set Category", command=self.open_bulk_category_editor).pack(side="left", padx=6)
 
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
@@ -1449,15 +1667,24 @@ class FileListerApp:
         tk.Button(top, text="Delete ALL", command=self.delete_all_db_rows).pack(side="right", padx=4)
         tk.Button(top, text="Delete Selected", command=self.delete_selected_db_rows).pack(side="right", padx=4)
 
-        cols = ("ID","File Name","Extension","Size","Storage ID","Creation Date","Full Path")
+        cols = ("No", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
 
         frame = tk.Frame(parent)
         frame.pack(fill="both", expand=True)
 
+        # ✅ CREATE TREE FIRST
         self.db_tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+
+        # ✅ HEADINGS + SORT
         for c in cols:
             self.db_tree.heading(c, text=c, command=lambda _c=c: self.sort_db_by_column(_c))
             self.db_tree.column(c, width=180, anchor="w")
+
+        # ✅ SPECIAL COLUMN FORMATTING (MUST be after creation)
+        self.db_tree.column("No", width=60, anchor="center")
+        self.db_tree.column("Size", width=100, anchor="e")
+        self.db_tree.column("Year", width=70, anchor="center")
+        self.db_tree.column("Path", width=380)
 
         self.db_tree.pack(side="left", fill="both", expand=True)
 
@@ -1465,7 +1692,7 @@ class FileListerApp:
         scroll.pack(side="right", fill="y")
         self.db_tree.configure(yscrollcommand=scroll.set)
 
-        self.db_tree.bind("<Double-1>", self.on_db_tree_double_click)
+        self.db_tree.bind("<Double-1>", self.edit_cell)
 
         pager = tk.Frame(parent)
         pager.pack(fill="x", pady=4)
@@ -1475,6 +1702,30 @@ class FileListerApp:
         tk.Button(pager, text="Last >|", command=self.last_db_page).pack(side="left", padx=4)
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
+
+
+    def recreate_database(self):
+        if not self.current_db_path:
+            messagebox.showwarning("No Database", "Please open or create a database first.")
+            return
+
+        if not messagebox.askyesno(
+            "Confirm Full Reset",
+            "This will DELETE ALL database records and recreate tables.\n\nProceed?"
+        ):
+            return
+
+        try:
+            self.init_db(fresh=True)
+            self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+            messagebox.showinfo("Done", "Database recreated successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"DB reset failed:\n{e}")
+    
 
     def open_sqlite_db(self):
         db_path = filedialog.askopenfilename(title="Select DB", filetypes=[("SQLite","*.db"),("All files","*.*")])
@@ -1582,6 +1833,7 @@ class FileListerApp:
 
         btns = tk.Frame(win)
         btns.pack(fill="x", pady=6)
+        
 
         tk.Button(btns, text="Auto-fix path",
                 command=lambda: self.fix_by_filename(tree, disk_files))\
@@ -1596,6 +1848,102 @@ class FileListerApp:
                 command=lambda: self.delete_selected_problem(tree, win))\
             .pack(side="right", padx=10)
 
+    def edit_cell(self, event):
+        region = self.db_tree.identify("region", event.x, event.y)
+        if region != "cell":
+            return
+        if not self.db_tree.identify_row(event.y):
+            return
+
+        row_id = self.db_tree.identify_row(event.y)
+        col = self.db_tree.identify_column(event.x)
+
+        if not row_id or not col:
+            return
+
+        col_index = int(col.replace("#", "")) - 1
+        col_name = self.db_tree["columns"][col_index]
+
+        if col_name not in ("Year", "Category"):
+            return
+
+        x, y, w, h = self.db_tree.bbox(row_id, col)
+        value = self.db_tree.item(row_id, "values")[col_index]
+        record_id = self.db_tree.item(row_id, "tags")[0]
+
+
+        # ---------------- YEAR EDITOR ----------------
+        if col_name == "Year":
+            edit = tk.Entry(self.db_tree)
+            edit.place(x=x, y=y, width=w, height=h)
+            edit.insert(0, value)
+            edit.focus()
+
+            def save_year(event=None):
+                new_val = edit.get().strip()
+
+                if new_val and not new_val.isdigit():
+                    messagebox.showwarning("Invalid Year", "Year must be numeric.")
+                    return
+
+                try:
+                    new_val = int(new_val) if new_val else None
+
+                    conn = sqlite3.connect(self.current_db_path)
+                    cur = conn.cursor()
+                    cur.execute("UPDATE Files SET year=? WHERE id=?", (new_val, record_id))
+                    conn.commit()
+                    conn.close()
+
+                    values = list(self.db_tree.item(row_id, "values"))
+                    values[col_index] = new_val if new_val else ""
+                    self.db_tree.item(row_id, values=values)
+
+                except Exception as e:
+                    messagebox.showerror("Update Error", str(e))
+
+                edit.destroy()
+
+            edit.bind("<Return>", save_year)
+            edit.bind("<FocusOut>", save_year)
+
+        # ---------------- CATEGORY EDITOR ----------------
+        else:
+            cats = self.get_all_categories()
+
+            combo = ttk.Combobox(self.db_tree, values=cats)
+            combo.place(x=x, y=y, width=w, height=h)
+            combo.set(value)
+            combo.focus()
+
+            def save_category(event=None):
+                new_val = combo.get().strip()
+                if not new_val:
+                    combo.destroy()
+                    return
+
+                new_val = new_val.title()
+                self.add_new_category(new_val)
+
+                try:
+                    conn = sqlite3.connect(self.current_db_path)
+                    cur = conn.cursor()
+                    cur.execute("UPDATE Files SET category=? WHERE id=?", (new_val, record_id))
+                    conn.commit()
+                    conn.close()
+
+                    values = list(self.db_tree.item(row_id, "values"))
+                    values[col_index] = new_val
+                    self.db_tree.item(row_id, values=values)
+
+                except Exception as e:
+                    messagebox.showerror("Update Error", str(e))
+
+                combo.destroy()
+
+            combo.bind("<<ComboboxSelected>>", save_category)
+            combo.bind("<FocusOut>", save_category)
+     
 
     def fix_by_filename(self, tree, disk_files):
 
@@ -1794,43 +2142,28 @@ class FileListerApp:
         self.update_status_bar_db_info()
 
     def refresh_db_tree(self, rows):
-        # Clear existing rows
-        for i in self.db_tree.get_children():
-            self.db_tree.delete(i)
+        self.db_tree.delete(*self.db_tree.get_children())
 
-        display = []
+        start = self.current_page * self.page_size
 
-        # Compute sequential numbering based on current page
-        start = self.current_page * self.page_size if hasattr(self, "current_page") else 0
+        for idx, r in enumerate(rows[start:start + self.page_size], start=1 + start):
+            id_, fname, ext, sizeb, storage_id, cdate, path, year, category = r
 
-        for idx, r in enumerate(rows):
-            # Defensive safety (schema lock)
-            if len(r) != 7:
-                continue  # or raise AssertionError
-
-            id_, fname, ext, sizeb, storage_id, cdate, path = r
-            seq_no = start + idx + 1
-
-            display.append((
-                seq_no,
+            self.db_tree.insert("", "end", values=(
+                idx,                       # 👈 serial number
                 fname,
                 ext,
                 self.format_size(sizeb),
                 storage_id,
                 self.format_date(cdate),
-                path
-            ))
-
-        # Insert into Treeview
-        for d in display:
-            self.db_tree.insert("", "end", values=d)
-
-        # Resize columns
-        self.auto_resize_columns(display)
+                path,
+                year if year else "",
+                category if category else ""
+            ), tags=(id_,))          # 👈 store real DB id safely
 
     
     def auto_resize_columns(self, display_rows):
-        cols = ("ID","File Name","Extension","Size","Storage ID","Creation Date","Full Path")
+        cols = ("ID", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
         maxw = [self._font.measure(c+"  ") for c in cols]
         for row in display_rows:
             for i, cell in enumerate(row):
@@ -1855,18 +2188,24 @@ class FileListerApp:
             self.refresh_db_tree([])
             self.page_label.config(text="Page 0 / 0")
             return
+
         if page_num < 0:
             page_num = 0
+
         if self.total_pages <= 0:
             self.total_pages = 1
+
         if page_num >= self.total_pages:
             page_num = self.total_pages - 1
+
         self.current_page = page_num
-        start = page_num * self.page_size
-        end = start + self.page_size
-        self.current_page_rows = self.all_filtered_rows[start:end]
-        self.refresh_db_tree(self.current_page_rows)
+
+        # ✅ PASS FULL LIST (not sliced)
+        self.refresh_db_tree(self.all_filtered_rows)
+
         self.page_label.config(text=f"Page {self.current_page+1} / {self.total_pages}")
+
+
     def first_db_page(self):
         # Go to first page (index 0)
         if self.total_pages <= 0:
@@ -1900,38 +2239,64 @@ class FileListerApp:
             messagebox.showerror("Error", "Invalid page size")
 
     def sort_db_by_column(self, col):
-        map_idx = {"ID":0,"File Name":1,"Extension":2,"Size":3,"Creation Date":4,"Full Path":5}
-        idx = map_idx.get(col, 0)
+        map_idx = {
+            "No": None,        # 👈 serial number only, not DB data
+            "Name": 1,
+            "Ext": 2,
+            "Size": 3,
+            "Storage": 4,
+            "Date": 5,
+            "Path": 6,
+            "Year": 7,
+            "Category": 8
+        }
+
+        idx = map_idx.get(col, None)
+
+        # Do nothing if user clicks "No"
+        if idx is None:
+            return
+
         rev = self._db_sort_reverse.get(col, False)
+
         try:
-            if col in ("ID","Size"):
-                sorted_rows = sorted(self.all_filtered_rows, key=lambda x: (x[idx] if x[idx] is not None else 0), reverse=not rev)
-            elif col == "Creation Date":
+            if col == "Size":
+                sorted_rows = sorted(
+                    self.all_filtered_rows,
+                    key=lambda x: (x[idx] if x[idx] is not None else 0),
+                    reverse=not rev
+                )
+
+            elif col == "Date":
                 def keyd(x):
                     v = x[idx]
-                    if isinstance(v, str):
+                    if not v:
+                        return datetime.datetime.min
+                    try:
+                        return datetime.datetime.fromisoformat(v)
+                    except:
                         try:
-                            return datetime.datetime.fromisoformat(v)
+                            return datetime.datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
                         except:
-                            try:
-                                return datetime.datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
-                            except:
-                                return str(v).lower()
-                    if isinstance(v, (int,float)):
-                        try:
-                            return datetime.datetime.fromtimestamp(v)
-                        except:
-                            return v
-                    return v
+                            return datetime.datetime.min
+
                 sorted_rows = sorted(self.all_filtered_rows, key=keyd, reverse=not rev)
+
             else:
-                sorted_rows = sorted(self.all_filtered_rows, key=lambda x: (str(x[idx]).lower() if x[idx] is not None else ""), reverse=not rev)
+                sorted_rows = sorted(
+                    self.all_filtered_rows,
+                    key=lambda x: (str(x[idx]).lower() if x[idx] is not None else ""),
+                    reverse=not rev
+                )
+
         except Exception:
-            sorted_rows = sorted(self.all_filtered_rows, key=lambda x: str(x[idx]).lower(), reverse=not rev)
+            sorted_rows = self.all_filtered_rows
+
         self._db_sort_reverse[col] = not rev
         self.all_filtered_rows = sorted_rows
+
         total = len(self.all_filtered_rows)
-        self.total_pages = (total-1)//self.page_size + 1 if total > 0 else 1
+        self.total_pages = (total - 1) // self.page_size + 1 if total > 0 else 1
         self.current_page = 0
         self.show_db_page(0)
 
@@ -1939,51 +2304,55 @@ class FileListerApp:
         item = self.db_tree.identify_row(event.y)
         if not item:
             return
+
         vals = self.db_tree.item(item, "values")
-        if not vals:
+        if not vals or len(vals) < 7:
             return
-        path = vals[6] if len(vals) > 6 else None
+
+        path = vals[6]
+
         if path and os.path.exists(path):
             self.open_file(path)
         else:
             messagebox.showerror("Error", "File not found on disk.")
 
+
     def delete_selected_db_rows(self):
         if not self.current_db_path:
             messagebox.showinfo("Info", "Open DB first")
             return
+
         sel = self.db_tree.selection()
         if not sel:
             messagebox.showinfo("Info", "No rows selected")
             return
+
         if not messagebox.askyesno("Confirm", f"Delete {len(sel)} selected rows?"):
             return
+
         try:
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
 
-            
-            for i in sel:
-                # Map the selected tree item to the underlying DB id using current_page_rows
+            for item in sel:
                 try:
-                    idx = self.db_tree.index(i)
-                    rid = int(self.current_page_rows[idx][0])
+                    record_id = self.db_tree.item(item, "tags")[0]   # ✅ REAL DB ID
+                    cur.execute("DELETE FROM Files WHERE id=?", (record_id,))
                 except Exception:
-                    # Fallback: try reading displayed value (older behavior)
-                    try:
-                        rid = int(self.db_tree.item(i)["values"][0])
-                    except Exception:
-                        continue
-                cur.execute("DELETE FROM Files WHERE id=?", (rid,))
+                    continue
+
             conn.commit()
             conn.close()
+
             self.load_db_records()
             self.update_db_statistics()
             self.update_status_bar_db_info()
 
             messagebox.showinfo("Success", "Deleted selected rows")
+
         except Exception as e:
             messagebox.showerror("Error", f"Delete failed: {e}")
+
 
     def delete_all_db_rows(self):
         if not self.current_db_path:
