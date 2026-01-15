@@ -1640,6 +1640,23 @@ class FileListerApp:
             col_name = self.db_tree["columns"][int(col.replace("#",""))-1]
             self.sort_db_by_column(col_name)
 
+    def load_category_dropdown(self):
+        if not self.current_db_path:
+            return
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT category FROM Files ORDER BY category")
+            cats = [r[0] for r in cur.fetchall() if r[0]]
+            conn.close()
+        except:
+            cats = []
+
+        values = ["All"] + cats + ["Uncategorized"]
+        self.db_category_combo["values"] = values
+        self.db_category_var.set("All")
+
+
     def setup_db_viewer_tab(self, parent):
         top = tk.Frame(parent)
         top.pack(fill="x", pady=6)
@@ -1657,15 +1674,31 @@ class FileListerApp:
         tk.Entry(top, textvariable=self.db_search_var, width=40).pack(side="left", padx=4)
         self.db_search_var.trace_add("write", lambda *a: self.filter_db_records())
 
+        tk.Label(top, text="Category:").pack(side="left", padx=(8,0))
+
+        self.db_category_var = tk.StringVar(value="All")
+        self.db_category_combo = ttk.Combobox(
+            top, textvariable=self.db_category_var,
+            state="readonly", width=18
+        )
+        self.db_category_combo.pack(side="left", padx=4)
+        self.db_category_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
+        
+        
         tk.Label(top, text="Page size:").pack(side="left", padx=(8,0))
         self.page_size_var = tk.IntVar(value=self.page_size)
         e = tk.Entry(top, textvariable=self.page_size_var, width=6)
         e.pack(side="left", padx=4)
         e.bind("<Return>", lambda ev: self.apply_page_size())
 
-        tk.Button(top, text="Export to Excel", command=self.export_db_to_excel).pack(side="right", padx=4)
-        tk.Button(top, text="Delete ALL", command=self.delete_all_db_rows).pack(side="right", padx=4)
-        tk.Button(top, text="Delete Selected", command=self.delete_selected_db_rows).pack(side="right", padx=4)
+        tk.Button(top, text="Export to Excel", width=16,
+                command=self.export_db_to_excel).pack(side="right", padx=6)
+
+        tk.Button(top, text="Delete ALL", width=14,
+                command=self.delete_all_db_rows).pack(side="right", padx=6)
+
+        tk.Button(top, text="Delete Selected", width=16,
+                command=self.delete_selected_db_rows).pack(side="right", padx=6)
 
         cols = ("No", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
 
@@ -1682,6 +1715,7 @@ class FileListerApp:
 
         # ✅ SPECIAL COLUMN FORMATTING (MUST be after creation)
         self.db_tree.column("No", width=60, anchor="center")
+        self.db_tree.column("Ext", width=70, anchor="center")
         self.db_tree.column("Size", width=100, anchor="e")
         self.db_tree.column("Year", width=70, anchor="center")
         self.db_tree.column("Path", width=380)
@@ -2140,6 +2174,8 @@ class FileListerApp:
         self.status_var.set(f"Loaded {total} rows from {self.current_db_path}")
         self.update_db_statistics()
         self.update_status_bar_db_info()
+        self.load_category_dropdown()
+
 
     def refresh_db_tree(self, rows):
         self.db_tree.delete(*self.db_tree.get_children())
@@ -2172,16 +2208,34 @@ class FileListerApp:
                     maxw[i] = w
         for i, c in enumerate(cols):
             self.db_tree.column(c, width=min(maxw[i]+10, 900))
+
     def filter_db_records(self):
         q = self.db_search_var.get().lower().strip() if hasattr(self, "db_search_var") else ""
-        if not q:
-            self.all_filtered_rows = list(self.db_records_cache)
-        else:
-            self.all_filtered_rows = [r for r in self.db_records_cache if any(q in (str(x).lower() if x is not None else "") for x in r)]
+        selected_cat = self.db_category_var.get() if hasattr(self, "db_category_var") else "All"
+
+        rows = list(self.db_records_cache)
+
+        # 🔍 text search filter
+        if q:
+            rows = [
+                r for r in rows
+                if any(q in (str(x).lower() if x is not None else "") for x in r)
+            ]
+
+        # 🏷 category filter
+        if selected_cat and selected_cat != "All":
+            if selected_cat == "Uncategorized":
+                rows = [r for r in rows if not r[8]]
+            else:
+                rows = [r for r in rows if r[8] == selected_cat]
+
+        self.all_filtered_rows = rows
+
         total = len(self.all_filtered_rows)
-        self.total_pages = (total-1)//self.page_size + 1 if total > 0 else 1
+        self.total_pages = (total - 1) // self.page_size + 1 if total > 0 else 1
         self.current_page = 0
         self.show_db_page(0)
+
 
     def show_db_page(self, page_num):
         if not self.all_filtered_rows:
@@ -2392,5 +2446,12 @@ class FileListerApp:
             messagebox.showerror("Error", f"Export failed: {e}")
 if __name__ == "__main__":
     root = tk.Tk()
+    root.title("File Lister Database Manager")
+    # ✅ Set proper default size so buttons & columns are visible
+    root.geometry("1700x820")
+
+    # ✅ Prevent UI from collapsing too small
+    root.minsize(1500, 700)
+
     app = FileListerApp(root)
     root.mainloop()
