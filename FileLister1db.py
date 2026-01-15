@@ -1786,21 +1786,24 @@ class FileListerApp:
         if not scan_root:
             return
 
-        # ---- Scan disk: filename -> [(path, size)] ----
-        disk_files = {}
+        # ---- Scan disk: (base_name, size) -> [full_path,...] ----
+        disk_index = {}
 
         for root, _, files in os.walk(scan_root):
             for f in files:
-                ext = os.path.splitext(f)[1].lower()
-                if ext not in self.allowed_video_exts:
+                base, ext = os.path.splitext(f)
+                if ext.lower() not in self.allowed_video_exts:
                     continue
+
                 full = os.path.join(root, f)
                 try:
-                    disk_files.setdefault(f.lower(), []).append(
-                        (full, os.path.getsize(full))
-                    )
+                    size = int(os.path.getsize(full))
                 except:
-                    pass
+                    continue
+
+                key = (base.lower(), size)
+                disk_index.setdefault(key, []).append(full)
+
 
         # ---- Load DB rows for selected storage id ----
         conn = sqlite3.connect(self.current_db_path)
@@ -1822,28 +1825,37 @@ class FileListerApp:
         problems = []
 
         for rid, name, ext, sizeb, old_path in rows:
-            fname = f"{name}{ext or ''}".lower()
+            key = (name.lower(), int(sizeb))
 
-            if fname not in disk_files:
-                problems.append((rid, fname, sizeb, old_path, "Missing on disk"))
-            else:
-                match = False
-                for real_path, real_size in disk_files[fname]:
-                    if real_size == sizeb:
-                        match = True
-                        break
-                if not match:
-                    problems.append((rid, fname, sizeb, old_path,
-                                    "Found by name, size mismatch"))
+            if key not in disk_index:
+                problems.append((rid, name, sizeb, old_path, "Missing on disk"))
+
+        # ---------- Disk -> DB check ----------
+        db_index = set(
+            (name.lower(), int(sizeb))
+            for _, name, ext, sizeb, _ in rows
+        )
+
+        for (base, size), paths in disk_index.items():
+            if (base, size) not in db_index:
+                for p in paths:
+                    problems.append((
+                        "—",
+                        base,
+                        size,
+                        p,
+                        "Exists on disk but missing in DB"
+                    ))
+                  
 
         if not problems:
             messagebox.showinfo("Verification Complete",
                                 "No discrepancies found for this disk.")
             return
 
-        self.show_db_disk_problems(problems, disk_files, storage_id, scan_root)
+        self.show_db_disk_problems(problems, disk_index, storage_id, scan_root)
   
-    def show_db_disk_problems(self, problems, disk_files, storage_id, scan_root):
+    def show_db_disk_problems(self, problems, disk_index, storage_id, scan_root):
 
         win = tk.Toplevel(self.root)
         win.title("DB vs Disk Verification")
@@ -1870,7 +1882,7 @@ class FileListerApp:
         
 
         tk.Button(btns, text="Auto-fix path",
-                command=lambda: self.fix_by_filename(tree, disk_files))\
+                command=lambda: self.fix_by_filename(tree, disk_index))\
             .pack(side="left", padx=6)
 
         tk.Button(btns, text="Edit path manually",
@@ -1979,7 +1991,7 @@ class FileListerApp:
             combo.bind("<FocusOut>", save_category)
      
 
-    def fix_by_filename(self, tree, disk_files):
+    def fix_by_filename(self, tree, disk_index):
 
         sel = tree.selection()
         if not sel:
@@ -1991,26 +2003,28 @@ class FileListerApp:
         fixed = 0
 
         for item in sel:
-            rid, fname, sizeb, _, _ = tree.item(item, "values")
-            fname = fname.lower()
+            rid, name, sizeb, _, problem = tree.item(item, "values")
+            key = (name.lower(), int(sizeb))
 
-            if fname not in disk_files:
+            if key not in disk_index:
                 continue
 
-            for real_path, real_size in disk_files[fname]:
-                if real_size == int(sizeb):
-                    cur.execute("UPDATE Files SET full_path=? WHERE id=?",
-                                (real_path, rid))
-                    tree.delete(item)
-                    fixed += 1
-                    break
+            real_path = disk_index[key][0]  # take first match
+
+            cur.execute(
+                "UPDATE Files SET full_path=? WHERE id=?",
+                (real_path, rid)
+            )
+
+            tree.delete(item)
+            fixed += 1
 
         conn.commit()
         conn.close()
 
         self.load_db_records()
         messagebox.showinfo("Auto-fix", f"Paths updated: {fixed}")
-   
+ 
 
     def relocate_selected_file(self, tree):
         sel = tree.selection()
