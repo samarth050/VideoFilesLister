@@ -1830,6 +1830,22 @@ class FileListerApp:
             if key not in disk_index:
                 problems.append((rid, name, sizeb, old_path, "Missing on disk"))
 
+        # ---- Load ALL DB rows for cross-storage detection ----
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+        cur.execute("""
+            SELECT file_name, size_bytes, storage_id
+            FROM Files
+        """)
+        all_db_rows = cur.fetchall()
+        conn.close()
+
+        global_db_map = {}
+        for n, s, sid in all_db_rows:
+            key = (n.lower(), int(s))
+            global_db_map.setdefault(key, set()).add(sid)
+        
+
         # ---------- Disk -> DB check ----------
         db_index = set(
             (name.lower(), int(sizeb))
@@ -1837,17 +1853,25 @@ class FileListerApp:
         )
 
         for (base, size), paths in disk_index.items():
-            if (base, size) not in db_index:
+            key = (base, size)
+
+            if key not in db_index:
                 for p in paths:
+
+                    if key in global_db_map:
+                        found_in = ", ".join(global_db_map[key])
+                        msg = f"Exists in DB under storage(s): {found_in}"
+                    else:
+                        msg = "Exists on disk but missing in DB"
+
                     problems.append((
                         "—",
                         base,
                         size,
                         p,
-                        "Exists on disk but missing in DB"
+                        msg
                     ))
-                  
-
+              
         if not problems:
             messagebox.showinfo("Verification Complete",
                                 "No discrepancies found for this disk.")
