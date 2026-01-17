@@ -19,6 +19,7 @@ Features:
 import os
 import json
 import sqlite3
+import ctypes
 import subprocess
 import sys
 import tkinter as tk
@@ -161,6 +162,9 @@ class FileListerApp:
         self.current_db_path = None
         self.db_records_cache = []
         self.all_filtered_rows = []
+        self.selected_storage_filter = tk.StringVar(value="ALL")
+        self.available_storage_ids = ["ALL"]
+
         #self.current_page_rows = []
         self.page_size = 50
         self.current_page = 0
@@ -181,7 +185,191 @@ class FileListerApp:
             self.init_db(fresh=True)
             self.load_db_records()
 
+    def format_bytes(self, size):
+        if not size:
+            return "0 MB"
+
+        tb = 1024 ** 4
+        gb = 1024 ** 3
+        mb = 1024 ** 2
+
+        if size >= tb:
+            return f"{size / tb:.2f} TB"
+        elif size >= gb:
+            return f"{size / gb:.2f} GB"
+        else:
+            return f"{size / mb:.2f} MB"
+
+    def get_windows_drive_label(self, drive_letter):
+        try:
+            import ctypes
+
+            volume_name_buffer = ctypes.create_unicode_buffer(1024)
+            fs_name_buffer = ctypes.create_unicode_buffer(1024)
+            serial_number = ctypes.c_ulong()
+            max_component_len = ctypes.c_ulong()
+            file_system_flags = ctypes.c_ulong()
+
+            rc = ctypes.windll.kernel32.GetVolumeInformationW(
+                ctypes.c_wchar_p(drive_letter + "\\"),
+                volume_name_buffer,
+                ctypes.sizeof(volume_name_buffer),
+                ctypes.byref(serial_number),
+                ctypes.byref(max_component_len),
+                ctypes.byref(file_system_flags),
+                fs_name_buffer,
+                ctypes.sizeof(fs_name_buffer)
+            )
+
+            if rc:
+                label = volume_name_buffer.value.strip()
+                return label if label else "NoLabel"
+        except Exception:
+            pass
+
+        return "Unknown"
+
+    def detect_storage_id_from_path(self, path):
+        try:
+            drive, _ = os.path.splitdrive(path)
+            drive = drive.replace("\\", "").upper()  # C:
+        except Exception:
+            return "UNKNOWN"
+
+        label = self.get_drive_label(drive)
+
+        # your existing meaningful folder-based ID logic
+        storage = "UNKNOWN"
+        parts = os.path.normpath(path).split(os.sep)
+
+        for p in parts:
+            up = p.upper()
+            if up.startswith(("HDD", "SSD", "USB", "MEDIA", "DRIVE")):
+                storage = p
+                break
+
+        if label:
+            return f"{label} ({drive})"
+        else:
+            return f"{drive}"
+
+
+    def get_drive_label(self, drive_letter):
+        try:
+            buf = ctypes.create_unicode_buffer(1024)
+            ctypes.windll.kernel32.GetVolumeInformationW(
+                f"{drive_letter}\\",
+                buf, 1024,
+                None, None, None, None, 0
+            )
+            return buf.value
+        except Exception:
+            return ""
+
+
+    def update_filelist_statistics(self, files_info):
+        """
+        files_info = self.all_files_info
+        list of dicts with keys:
+        name_without_ext, full_path, extension, size, creation_date, year, category, tracked
+        """
+
+        total_files = len(files_info)
+        total_bytes = 0
+
+        ext_map = {}
+        storage_map = {}
+
+        for info in files_info:
+            size = info.get("size", 0) or 0
+            ext = (info.get("extension") or "").lower()
+            path = info.get("full_path", "")
+
+            total_bytes += size
+
+            # -------- extension stats --------
+            ext_map.setdefault(ext, [0, 0])
+            ext_map[ext][0] += 1
+            ext_map[ext][1] += size
+
+            # -------- storage stats --------
+            storage_id = self.detect_storage_id_from_path(path)
+            storage_map.setdefault(storage_id, [0, 0])
+            storage_map[storage_id][0] += 1
+            storage_map[storage_id][1] += size
+
+        # -------- top totals --------
+        self.total_files_var.set(f"Total Files: {total_files:,}")
+        self.total_size_var.set(f"Total Size: {self.format_size(total_bytes)}")
+
+        # -------- files by extension tree --------
+        for i in self.file_ext_tree.get_children():
+            self.file_ext_tree.delete(i)
+
+        for ext in sorted(ext_map):
+            cnt, sz = ext_map[ext]
+            self.file_ext_tree.insert("", "end", values=(ext, cnt, self.format_size(sz)))
+
+        # -------- storage summary tree --------
+        if hasattr(self, "file_storage_tree"):
+            for i in self.file_storage_tree.get_children():
+                self.file_storage_tree.delete(i)
+
+            for sid in sorted(storage_map):
+                cnt, sz = storage_map[sid]
+                self.file_storage_tree.insert(
+                    "", "end",
+                    values=(sid, cnt, self.format_size(sz))
+                )
+
                 
+    def update_storage_statistics(self):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+
+        # Clear old
+        for i in self.db_storage_tree.get_children():
+            self.db_storage_tree.delete(i)
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT storage_id,
+                    COUNT(*) AS cnt,
+                    SUM(size_bytes) AS total_size
+                FROM Files
+                GROUP BY storage_id
+                ORDER BY storage_id
+            """)
+
+            rows = cur.fetchall()
+            conn.close()
+
+            total_files = 0
+            total_size = 0
+
+            for sid, cnt, size in rows:
+                total_files += cnt
+                total_size += size or 0
+
+                self.db_storage_tree.insert(
+                    "", "end",
+                    values=(sid, cnt, self.format_size(size))
+                )
+
+            # Optional TOTAL row
+            self.db_storage_tree.insert(
+                "", "end",
+                values=("TOTAL", total_files, self.format_size(total_size))
+            )
+
+        except Exception as e:
+            print("Storage stats error:", e)
+
+
+
     def extract_year_from_filename(self, filename):
         matches = re.findall(r'(19\d{2}|20\d{2})', filename)
         if matches:
@@ -257,6 +445,7 @@ class FileListerApp:
 
         tk.Button(opt_frame, text="List Files", command=self.list_files).pack(side="right")
 
+
         tk.Button(
                 opt_frame,
                 text="Update Storage ID from Scan",
@@ -312,6 +501,58 @@ class FileListerApp:
             tk.Label(details_frame, textvariable=var).grid(row=i, column=1, sticky="w", pady=4)
             self.detail_vars[lbl] = var
 
+        # ================= FILE SCAN STATISTICS =================
+
+        totals_frame = ttk.Frame(parent)
+        totals_frame.pack(fill="x", padx=8, pady=(4,2))
+
+        self.total_files_var = tk.StringVar(value="Total Files: 0")
+        self.total_size_var = tk.StringVar(value="Total Size: 0 MB")
+
+        ttk.Label(totals_frame, textvariable=self.total_files_var,
+                font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
+
+        ttk.Label(totals_frame, textvariable=self.total_size_var,
+                font=("Segoe UI", 10, "bold")).pack(side="left", padx=20)
+
+        # ---------- Files by Extension ----------
+        ext_frame = ttk.LabelFrame(parent, text="Files by Extension (Scan Results)")
+        ext_frame.pack(fill="x", padx=8, pady=4)
+
+        self.file_ext_tree = ttk.Treeview(
+            ext_frame, columns=("Ext", "Files", "Total Size"),
+            show="headings", height=5
+        )
+        self.file_ext_tree.pack(fill="x", padx=6, pady=4)
+
+        self.file_ext_tree.heading("Ext", text="Extension")
+        self.file_ext_tree.heading("Files", text="File Count")
+        self.file_ext_tree.heading("Total Size", text="Total Size")
+
+        self.file_ext_tree.column("Ext", width=120, anchor="w")
+        self.file_ext_tree.column("Files", width=100, anchor="e")
+        self.file_ext_tree.column("Total Size", width=140, anchor="e")
+
+
+        # ---------- Storage Summary ----------
+        storage_stats_frame = ttk.LabelFrame(parent, text="Storage Summary (Scan Results)")
+        storage_stats_frame.pack(fill="x", padx=8, pady=4)
+
+        self.file_storage_tree = ttk.Treeview(
+            storage_stats_frame, columns=("Storage", "Files", "Total Size"),
+            show="headings", height=5
+        )
+        self.file_storage_tree.pack(fill="x", padx=6, pady=4)
+
+        self.file_storage_tree.heading("Storage", text="Attached Media")
+        self.file_storage_tree.heading("Files", text="File Count")
+        self.file_storage_tree.heading("Total Size", text="Total Size")
+
+        self.file_storage_tree.column("Storage", width=200, anchor="w")
+        self.file_storage_tree.column("Files", width=100, anchor="e")
+        self.file_storage_tree.column("Total Size", width=140, anchor="e")
+        
+        
         bottom = tk.Frame(parent)
         bottom.pack(fill="x", pady=10)
 
@@ -711,6 +952,7 @@ class FileListerApp:
     
 
     def setup_stats_tab(self, parent):
+        """
         summary = tk.Frame(parent)
         summary.pack(fill="x", pady=5)
 
@@ -737,7 +979,7 @@ class FileListerApp:
 
         self.ext_tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
-
+    """
         # -------- DATABASE STATISTICS ----------
         db_frame = tk.LabelFrame(parent, text="Database Statistics")
         db_frame.pack(fill="both", expand=True, padx=6, pady=6)
@@ -771,6 +1013,26 @@ class FileListerApp:
         self.db_size_var = tk.StringVar(value="DB Size: 0 MB")
         tk.Label(db_frame, textvariable=self.db_size_var,
          font=("Arial", 9)).pack(anchor="w")
+        
+        # ---------------- STORAGE-WISE STATS ----------------
+        storage_frame = ttk.LabelFrame(parent, text="Storage Summary")
+        storage_frame.pack(fill="x", padx=8, pady=6)
+
+        self.db_storage_tree = ttk.Treeview(
+            storage_frame,
+            columns=("Storage", "Files", "Total Size"),
+            show="headings",
+            height=6
+        )
+        self.db_storage_tree.pack(fill="x", padx=6, pady=4)
+
+        self.db_storage_tree.heading("Storage", text="Storage ID")
+        self.db_storage_tree.heading("Files", text="File Count")
+        self.db_storage_tree.heading("Total Size", text="Total Size")
+
+        self.db_storage_tree.column("Storage", width=200, anchor="w")
+        self.db_storage_tree.column("Files", width=100, anchor="e")
+        self.db_storage_tree.column("Total Size", width=140, anchor="e")
         
         tk.Button(parent, text="Export Statistics to Excel",
           command=self.export_db_statistics_to_excel).pack(anchor="w", padx=6, pady=4)
@@ -1026,11 +1288,16 @@ class FileListerApp:
         except Exception as e:
             self.status_var.set(f"Chart error: {e}")
 
-
     def update_db_statistics(self):
         # Clear old rows
         for i in self.db_ext_tree.get_children():
             self.db_ext_tree.delete(i)
+
+        # Clear storage stats
+        if hasattr(self, "db_storage_tree"):
+            for i in self.db_storage_tree.get_children():
+                self.db_storage_tree.delete(i)
+
 
         if not self.current_db_path or not os.path.exists(self.current_db_path):
             self.db_total_records_var.set("DB Records: 0")
@@ -1045,8 +1312,7 @@ class FileListerApp:
 
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
-            
-
+           
             # Total records
             cur.execute("SELECT COUNT(*) FROM Files")
             total = cur.fetchone()[0]
@@ -1078,12 +1344,14 @@ class FileListerApp:
                     "", "end",
                     values=(ext, cnt, self.format_size(size))
                     )
-
+            
+            self.update_storage_statistics()  
         except Exception as e:
             self.db_total_records_var.set("DB Records: Error")
             self.db_size_var.set("DB Size: Error")
             self.status_var.set(f"DB stats error: {e}")
-
+          
+   
 
     def update_status_bar_db_info(self):
         if not self.current_db_path or not os.path.exists(self.current_db_path):
@@ -1148,13 +1416,22 @@ class FileListerApp:
 
         # populate listbox; disambiguate duplicate display names
         for info in self.all_files_info:
-            display = info["name_without_ext"]
+            name = info["name_without_ext"]
+            ext = info.get("extension", "")
+            size = info.get("size", 0)
+
+            size_text = self.format_size(size)
+
+            display = f"{name}{ext}   [{size_text}]"
+
+            # disambiguate duplicates
             if display in self.file_paths:
                 base = display
                 n = 2
                 while f"{base} ({n})" in self.file_paths:
                     n += 1
                 display = f"{base} ({n})"
+
             self.file_listbox.insert(tk.END, display)
             self.file_paths[display] = info["full_path"]
 
@@ -1162,7 +1439,8 @@ class FileListerApp:
         self.files_count_var.set(f"Files: {total}")
         self.status_var.set(f"Found {total} video files")
 
-        self.update_statistics()
+        
+        self.update_filelist_statistics(self.all_files_info)
 
         # clear details
         for v in self.detail_vars.values():
@@ -1239,26 +1517,7 @@ class FileListerApp:
 
         return results
     
-    
-    def update_statistics(self):
-        for item in self.ext_tree.get_children():
-            self.ext_tree.delete(item)
-        if not self.all_files_info:
-            self.total_files_var.set("Total Files: 0")
-            self.total_size_var.set("Total Size: 0 bytes")
-            return
-        total_files = len(self.all_files_info)
-        total_size = sum(x["size"] for x in self.all_files_info)
-        self.total_files_var.set(f"Total Files: {total_files}")
-        self.total_size_var.set(f"Total Size: {self.format_size(total_size)}")
-
-        exts = defaultdict(lambda: {"count": 0, "size": 0})
-        for x in self.all_files_info:
-            exts[x["extension"]]["count"] += 1
-            exts[x["extension"]]["size"] += x["size"]
-        for ext, stats in sorted(exts.items()):
-            self.ext_tree.insert("", "end", values=(ext, stats["count"], self.format_size(stats["size"])))
-
+ 
     def format_size(self, size_bytes):
         try:
             size = int(size_bytes or 0)
@@ -1656,8 +1915,58 @@ class FileListerApp:
         self.db_category_combo["values"] = values
         self.db_category_var.set("All")
 
+    def load_storage_ids_from_db(self):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT DISTINCT storage_id
+                FROM Files
+                WHERE storage_id IS NOT NULL AND TRIM(storage_id) <> ''
+                ORDER BY storage_id
+            """)
+
+            rows = cur.fetchall()
+            conn.close()
+
+            ids = ["ALL"] + [r[0] for r in rows]
+
+            self.available_storage_ids = ids
+            self.storage_filter_combo["values"] = ids
+
+            if self.selected_storage_filter.get() not in ids:
+                self.selected_storage_filter.set("ALL")
+
+        except Exception as e:
+            print("Storage ID dropdown load error:", e)
+
 
     def setup_db_viewer_tab(self, parent):
+        
+        # ---------- Storage ID Filter ----------
+        filter_frame = tk.Frame(parent)
+        filter_frame.pack(fill="x", padx=8, pady=4)
+
+        tk.Label(filter_frame, text="Storage ID:", font=("Segoe UI", 9, "bold")).pack(side="left")
+
+        self.storage_filter_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.selected_storage_filter,
+            values=["ALL"],
+            state="readonly",
+            width=30
+        )
+        self.storage_filter_combo.pack(side="left", padx=6)
+
+        self.storage_filter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.load_db_records()
+        )
+
         top = tk.Frame(parent)
         top.pack(fill="x", pady=6)
 
@@ -2188,10 +2497,20 @@ class FileListerApp:
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
 
-            # Load ALL records (no pagination here)
-            cur.execute(DB_SELECT_ALL)
-            rows = cur.fetchall()
+            selected_sid = self.selected_storage_filter.get()
 
+            if selected_sid == "ALL":
+                cur.execute(DB_SELECT_ALL)
+            else:
+                cur.execute("""
+                    SELECT id, file_name, extension, size_bytes, storage_id,
+                        creation_date, full_path, year, category
+                    FROM Files
+                    WHERE storage_id = ?
+                    ORDER BY id DESC
+                """, (selected_sid,))
+
+            rows = cur.fetchall()
             conn.close()
 
         except Exception as e:
@@ -2213,6 +2532,10 @@ class FileListerApp:
         self.update_db_statistics()
         self.update_status_bar_db_info()
         self.load_category_dropdown()
+
+        # ✅ refresh Storage ID dropdown
+        self.load_storage_ids_from_db()
+
 
 
     def refresh_db_tree(self, rows):
