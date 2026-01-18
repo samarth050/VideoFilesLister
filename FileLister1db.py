@@ -463,25 +463,42 @@ class FileListerApp:
         split = tk.Frame(parent)
         split.pack(fill="both", expand=True)
 
-        # LEFT: listbox
+        # LEFT: table (tabular view)
         left = tk.Frame(split)
         left.pack(side="left", fill="both", expand=True)
 
         self.files_count_var = tk.StringVar(value="Files: 0")
         tk.Label(left, textvariable=self.files_count_var).pack(anchor="w")
 
-        lb_frame = tk.Frame(left)
-        lb_frame.pack(fill="both", expand=True)
+        table_frame = tk.Frame(left)
+        table_frame.pack(fill="both", expand=True)
 
-        scrollbar = tk.Scrollbar(lb_frame)
-        scrollbar.pack(side="right", fill="y")
+        cols = ("name", "ext", "size")
+        self.file_table = ttk.Treeview(
+            table_frame,
+            columns=cols,
+            show="headings"
+        )
 
-        self.file_listbox = tk.Listbox(lb_frame, yscrollcommand=scrollbar.set)
-        self.file_listbox.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=self.file_listbox.yview)
+        self.file_table.heading("name", text="File Name")
+        self.file_table.heading("ext", text="File Extension")
+        self.file_table.heading("size", text="File Size")
 
-        self.file_listbox.bind("<<ListboxSelect>>", self.on_file_select)
-        self.file_listbox.bind("<Double-Button-1>", self.on_file_list_double_click)
+        self.file_table.column("name", width=380, anchor="w")
+        self.file_table.column("ext", width=120, anchor="center")
+        self.file_table.column("size", width=120, anchor="e")
+
+        ys = ttk.Scrollbar(table_frame, orient="vertical", command=self.file_table.yview)
+        xs = ttk.Scrollbar(table_frame, orient="horizontal", command=self.file_table.xview)
+        self.file_table.configure(yscroll=ys.set, xscroll=xs.set)
+
+        self.file_table.pack(side="left", fill="both", expand=True)
+        ys.pack(side="right", fill="y")
+        xs.pack(side="bottom", fill="x")
+
+        self.file_table.bind("<<TreeviewSelect>>", self.on_file_table_select)
+        self.file_table.bind("<Double-1>", self.on_file_table_double_click)
+
 
         # RIGHT: details
         right = tk.Frame(split, width=350)
@@ -1397,6 +1414,37 @@ class FileListerApp:
             self.folder_path.set(folder)
             self.status_var.set(f"Selected: {folder}")
 
+    def on_file_table_select(self, event):
+        sel = self.file_table.selection()
+        if not sel:
+            return
+
+        iid = sel[0]
+        path = self.file_paths.get(iid)
+        if not path:
+            return
+
+        try:
+            self.detail_vars["File Name"].set(os.path.basename(path).rsplit(".", 1)[0])
+            self.detail_vars["Extension"].set(os.path.splitext(path)[1])
+            self.detail_vars["Size"].set(self.format_size(os.path.getsize(path)))
+            self.detail_vars["Creation Date"].set(
+                self.format_date(datetime.datetime.fromtimestamp(os.path.getctime(path)))
+            )
+        except Exception as e:
+            self.status_var.set(f"Error reading file: {e}")
+
+
+    def on_file_table_double_click(self, event):
+        item = self.file_table.identify_row(event.y)
+        if not item:
+            return
+
+        path = self.file_paths.get(item)
+        if path and os.path.exists(path):
+            os.startfile(path)
+
+
     def list_files(self):
         folder = self.folder_path.get()
         if not folder or not os.path.isdir(folder):
@@ -1404,9 +1452,10 @@ class FileListerApp:
             return
 
         # reset
-        self.file_listbox.delete(0, tk.END)
+        self.file_table.delete(*self.file_table.get_children())
         self.file_paths.clear()
         self.all_files_info.clear()
+
 
         # get files (video-only)
         self.all_files_info = self.get_files_info(folder)
@@ -1422,23 +1471,16 @@ class FileListerApp:
 
             size_text = self.format_size(size)
 
-            display = f"{name}{ext}   [{size_text}]"
+            iid = self.file_table.insert(
+                "", "end",
+                values=(name, ext, size_text)
+            )
 
-            # disambiguate duplicates
-            if display in self.file_paths:
-                base = display
-                n = 2
-                while f"{base} ({n})" in self.file_paths:
-                    n += 1
-                display = f"{base} ({n})"
-
-            self.file_listbox.insert(tk.END, display)
-            self.file_paths[display] = info["full_path"]
+        self.file_paths[iid] = info["full_path"]
 
         total = len(self.all_files_info)
         self.files_count_var.set(f"Files: {total}")
         self.status_var.set(f"Found {total} video files")
-
         
         self.update_filelist_statistics(self.all_files_info)
 
@@ -1543,32 +1585,6 @@ class FileListerApp:
         except:
             return str(d)
 
-    def on_file_select(self, event):
-        sel = self.file_listbox.curselection()
-        if not sel:
-            return
-        name = self.file_listbox.get(sel[0])
-        path = self.file_paths.get(name)
-        if not path:
-            return
-        try:
-            self.detail_vars["File Name"].set(os.path.basename(path).rsplit(".", 1)[0])
-            self.detail_vars["Extension"].set(os.path.splitext(path)[1])
-            self.detail_vars["Size"].set(self.format_size(os.path.getsize(path)))
-            self.detail_vars["Creation Date"].set(self.format_date(datetime.datetime.fromtimestamp(os.path.getctime(path))))
-            self.status_var.set(f"Selected: {os.path.basename(path)}")
-        except Exception as e:
-            self.status_var.set(f"Error reading file: {e}")
-    def on_file_list_double_click(self, event):
-        sel = self.file_listbox.curselection()
-        if not sel:
-            return
-        name = self.file_listbox.get(sel[0])
-        path = self.file_paths.get(name)
-        if path and os.path.exists(path):
-            self.open_file(path)
-        else:
-            messagebox.showerror("Error", "File not found on disk.")
     def open_file(self, path):
         try:
             if sys.platform.startswith("win"):
