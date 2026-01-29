@@ -1034,9 +1034,7 @@ class FileListerApp:
 
         try:
             conn = sqlite3.connect(self.current_db_path)
-
             groups = analyze_duplicates(conn)
-
             conn.close()
 
             if not groups:
@@ -1044,18 +1042,27 @@ class FileListerApp:
                 return
 
             total = 0
+            potential_saving = 0
 
             for group in groups:
 
                 # -------- choose color tag based on duplicate type --------
                 if group["type"] == "Duplicate Record":
                     row_tag = "dup_exact"
-                elif group["type"] == "Versions Exist":
+                elif group["type"] == "Two Versions Exist" or group["type"] == "Versions Exist":
                     row_tag = "dup_versions"
                 elif group["type"] == "Upgraded Version Exists":
                     row_tag = "dup_upgrade"
                 else:
                     row_tag = "dup_partial"
+
+                records = group["records"]
+
+                # -------- calculate potential saving (keep largest only) --------
+                if len(records) > 1:
+                    largest = max(r["size_bytes"] for r in records)
+                    deletable = sum(r["size_bytes"] for r in records) - largest
+                    potential_saving += deletable
 
                 # -------- group header --------
                 self.dup_tree.insert(
@@ -1065,33 +1072,34 @@ class FileListerApp:
                 )
 
                 # -------- records --------
-                for rec in group["records"]:
-                    name = rec["file_name"]
-                    ext = rec["extension"]
-                    size = format_size(rec["size_bytes"])
-
+                for rec in records:
                     self.dup_tree.insert(
                         "", "end",
                         iid=f"dup_{rec['id']}",
                         values=(
                             group["type"],
                             rec["id"],
-                            name,
-                            ext,
-                            size,
+                            rec["file_name"],
+                            rec["extension"],
+                            format_size(rec["size_bytes"]),
                             rec["storage_id"],
                             rec["full_path"],
                             rec["creation_date"]
                         ),
                         tags=(row_tag,)
                     )
-
                     total += 1
 
-            self.status_var.set(f"Duplicate / version records found: {total}")
+            saved_str = format_bytes(potential_saving)
+
+            self.status_var.set(
+                f"Duplicate / version records: {total} | "
+                f"Potential space saving (keep largest only): {saved_str}"
+            )
 
         except Exception as e:
             self.status_var.set(f"Duplicate scan error: {e}")
+
 
 
 
