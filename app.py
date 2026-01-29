@@ -493,7 +493,13 @@ class FileListerApp:
             messagebox.showwarning("Warning", "Please select a folder first.")
             return
 
-        scanned_files = self.get_files_info(self.folder_path.get())
+        scanned_files = get_files_info(
+            self.folder_path.get(),
+            self.allowed_video_exts,
+            self.include_subdirs.get()
+        )
+
+
 
         if not scanned_files:
             messagebox.showinfo("Info", "No video files found in selected path.")
