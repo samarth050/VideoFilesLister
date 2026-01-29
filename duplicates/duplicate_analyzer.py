@@ -84,7 +84,7 @@ def analyze_duplicates(conn):
         sizes = {r["size_bytes"] for r in group}
         if len(group) > 1 and len(sizes) > 1:
             mark_used(group, used_ids)
-            results.append(make_group("Two Versions Exist", name, group))
+            results.append(make_group("Versions Exist", name, group))
 
     # ---------------------------------------
     # 3. Upgraded Version Exists
@@ -133,6 +133,7 @@ def fetch_all_files(conn):
         SELECT
             id,
             file_name,
+            extension,
             size_bytes,
             storage_id,
             full_path,

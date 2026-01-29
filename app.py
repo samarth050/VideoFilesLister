@@ -1050,7 +1050,7 @@ class FileListerApp:
                 # -------- choose color tag based on duplicate type --------
                 if group["type"] == "Duplicate Record":
                     row_tag = "dup_exact"
-                elif group["type"] == "Two Versions Exist":
+                elif group["type"] == "Versions Exist":
                     row_tag = "dup_versions"
                 elif group["type"] == "Upgraded Version Exists":
                     row_tag = "dup_upgrade"
@@ -1067,7 +1067,7 @@ class FileListerApp:
                 # -------- records --------
                 for rec in group["records"]:
                     name = rec["file_name"]
-                    ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+                    ext = rec["extension"]
                     size = format_size(rec["size_bytes"])
 
                     self.dup_tree.insert(
@@ -1083,8 +1083,9 @@ class FileListerApp:
                             rec["full_path"],
                             rec["creation_date"]
                         ),
-                        tags=(row_tag,)   # ✅ color applied here
+                        tags=(row_tag,)
                     )
+
                     total += 1
 
             self.status_var.set(f"Duplicate / version records found: {total}")
