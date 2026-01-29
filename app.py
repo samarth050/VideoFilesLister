@@ -23,6 +23,7 @@ from scanner.scanner import (
     get_windows_drive_label,
     get_drive_label
 )
+from duplicates.duplicate_analyzer import analyze_duplicates
 from utils.helpers import format_size, format_bytes, format_db_total_size, format_date
 import os
 import json
@@ -967,17 +968,61 @@ class FileListerApp:
         top.pack(fill="x", padx=5, pady=5)
 
         tk.Button(top, text="Scan Duplicates",
-                  command=self.load_duplicate_records).pack(side="left", padx=4)
+                command=self.load_duplicate_records).pack(side="left", padx=4)
 
         tk.Button(top, text="Delete Selected Duplicate",
-              command=self.delete_selected_duplicate).pack(side="left", padx=4)
+                command=self.delete_selected_duplicate).pack(side="left", padx=4)
 
-        cols = ("ID", "File Name", "Size", "Storage ID", "Full Path")
+        cols = ("Type", "ID", "File Name", "Ext", "Size", "Storage ID", "Full Path", "Created")
+
         self.dup_tree = ttk.Treeview(parent, columns=cols, show="headings")
 
-        for c in cols:
-            self.dup_tree.heading(c, text=c)
-            self.dup_tree.column(c, width=220)
+        self.dup_tree.heading("Type", text="Duplicate Type")
+        self.dup_tree.heading("ID", text="ID")
+        self.dup_tree.heading("File Name", text="File Name")
+        self.dup_tree.heading("Ext", text="Ext")
+        self.dup_tree.heading("Size", text="Size")
+        self.dup_tree.heading("Storage ID", text="Storage ID")
+        self.dup_tree.heading("Full Path", text="Full Path")
+        self.dup_tree.heading("Created", text="Created")
+
+        self.dup_tree.column("Type", width=170, anchor="w")
+        self.dup_tree.column("ID", width=70, anchor="center")
+        self.dup_tree.column("File Name", width=220, anchor="w")
+        self.dup_tree.column("Ext", width=60, anchor="center")
+        self.dup_tree.column("Size", width=90, anchor="e")
+        self.dup_tree.column("Storage ID", width=120, anchor="center")
+        self.dup_tree.column("Full Path", width=350, anchor="w")
+        self.dup_tree.column("Created", width=150, anchor="center")
+
+        self.dup_tree.tag_configure(
+            "group_header",
+            background="#e6e6e6",
+            font=("Segoe UI", 9, "bold")
+        )
+
+        # --- Color coding by duplicate type ---
+
+        self.dup_tree.tag_configure(
+            "dup_exact",      # Duplicate Record
+            background="#ffe6e6"   # light red
+        )
+
+        self.dup_tree.tag_configure(
+            "dup_versions",   # Two Versions Exist
+            background="#fff4cc"   # light yellow
+        )
+
+        self.dup_tree.tag_configure(
+            "dup_upgrade",    # Upgraded Version Exists
+            background="#e6f0ff"   # light blue
+        )
+
+        self.dup_tree.tag_configure(
+            "dup_partial",    # Partial Match
+            background="#e9ffe9"   # light green
+        )
+
 
         self.dup_tree.pack(fill="both", expand=True, padx=5, pady=5)
 
@@ -985,37 +1030,68 @@ class FileListerApp:
         if not self.current_db_path:
             return
 
-        for i in self.dup_tree.get_children():
-                self.dup_tree.delete(i)
+        self.dup_tree.delete(*self.dup_tree.get_children())
+
         try:
             conn = sqlite3.connect(self.current_db_path)
-            cur = conn.cursor()
 
-            
-            cur.execute("""
-                SELECT id, file_name, size_bytes, storage_id, full_path
-                FROM Files
-                WHERE (file_name, size_bytes) IN (
-                    SELECT file_name, size_bytes
-                    FROM Files
-                    GROUP BY file_name, size_bytes
-                    HAVING COUNT(*) > 1
-                    )
-                ORDER BY file_name, size_bytes
-                """)
+            groups = analyze_duplicates(conn)
 
-            rows = cur.fetchall()
             conn.close()
 
-            for rid, name, size,storage,path in rows:
+            if not groups:
+                self.status_var.set("No duplicates or versions found.")
+                return
+
+            total = 0
+
+            for group in groups:
+
+                # -------- choose color tag based on duplicate type --------
+                if group["type"] == "Duplicate Record":
+                    row_tag = "dup_exact"
+                elif group["type"] == "Two Versions Exist":
+                    row_tag = "dup_versions"
+                elif group["type"] == "Upgraded Version Exists":
+                    row_tag = "dup_upgrade"
+                else:
+                    row_tag = "dup_partial"
+
+                # -------- group header --------
                 self.dup_tree.insert(
                     "", "end",
-                    values=(rid, name, format_size(size), storage, path)
+                    values=(f"[{group['type']}]", "", "", "", "", "", "", ""),
+                    tags=("group_header",)
                 )
-            self.status_var.set(f"Duplicate records found: {len(rows)}")
+
+                # -------- records --------
+                for rec in group["records"]:
+                    name = rec["file_name"]
+                    ext = name.rsplit(".", 1)[1].lower() if "." in name else ""
+                    size = format_size(rec["size_bytes"])
+
+                    self.dup_tree.insert(
+                        "", "end",
+                        iid=f"dup_{rec['id']}",
+                        values=(
+                            group["type"],
+                            rec["id"],
+                            name,
+                            ext,
+                            size,
+                            rec["storage_id"],
+                            rec["full_path"],
+                            rec["creation_date"]
+                        ),
+                        tags=(row_tag,)   # ✅ color applied here
+                    )
+                    total += 1
+
+            self.status_var.set(f"Duplicate / version records found: {total}")
 
         except Exception as e:
             self.status_var.set(f"Duplicate scan error: {e}")
+
 
 
     def delete_selected_duplicate(self):
@@ -1023,29 +1099,36 @@ class FileListerApp:
         if not sel:
             return
 
+        ids = []
+        for item in sel:
+            if item.startswith("dup_"):
+                ids.append(int(item.replace("dup_", "")))
+
+        if not ids:
+            return
+
         if not messagebox.askyesno(
-            "Confirm",
-            "Delete selected duplicate record(s)?\n(This does NOT delete the file)"
-            ):
+            "Confirm Delete",
+            "Delete selected database records?\n\n(This will NOT delete physical files)"
+        ):
             return
 
         try:
             conn = sqlite3.connect(self.current_db_path)
             cur = conn.cursor()
-            
-            for item in sel:
-                record_id = self.dup_tree.item(item, "values")[0]
-                cur.execute("DELETE FROM Files WHERE id = ?", (record_id,))
-                self.dup_tree.delete(item)
+
+            cur.executemany("DELETE FROM Files WHERE id = ?", [(i,) for i in ids])
 
             conn.commit()
             conn.close()
 
+            self.load_duplicate_records()
             self.update_db_statistics()
             self.update_status_bar_db_info()
 
         except Exception as e:
             messagebox.showerror("Error", f"Delete failed: {e}")
+
 
 
 
