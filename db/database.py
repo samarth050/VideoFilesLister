@@ -37,3 +37,13 @@ def ensure_global_unique_index(db_path):
 
     conn.commit()
     conn.close()
+
+def get_storage_ids(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT DISTINCT storage_id
+        FROM files
+        WHERE storage_id IS NOT NULL
+        ORDER BY storage_id
+    """)
+    return [row[0] for row in cursor.fetchall()]

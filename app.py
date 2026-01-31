@@ -84,6 +84,8 @@ class ExportDialog:
         x = parent.winfo_rootx() + 100
         y = parent.winfo_rooty() + 100
         self.top.geometry(f"+{x}+{y}")
+        self.after(100, self.load_storage_ids_from_db)
+
 
     def on_ok(self):
         self.result = self.var.get()
@@ -154,6 +156,16 @@ class FileListerApp:
         if not os.path.exists(self.master_db_path):
             init_db(self.current_db_path, fresh=True)
             self.load_db_records()
+                # Load settings
+        settings = self.load_settings()
+        self.current_db_path = settings.get("last_db_path")
+
+        # Build UI here (tabs, combo boxes, etc.)
+
+        # Populate combos AFTER UI + DB are ready
+        self.root.after(100, self.load_storage_ids_from_db)
+
+    
 
   
  
@@ -279,6 +291,7 @@ class FileListerApp:
 
     def save_settings(self, data):
         settings = self.load_settings()
+        self.current_db_path = settings.get("last_db_path")
         settings.update(data)
         try:
             with open(self.CONFIG_FILE, "w") as f:
@@ -468,12 +481,14 @@ class FileListerApp:
 
         tk.Label(storage_frame, text="Storage ID:").pack(side="left")
 
-        self.storage_id_entry = tk.Entry(
+        self.storage_id_combo = ttk.Combobox(
             storage_frame,
             textvariable=self.storage_id_var,
-            width=25
+            width=23,          # ttk uses slightly different sizing
+            state="normal"     # <-- allows typing NEW Storage IDs
         )
-        self.storage_id_entry.pack(side="left", padx=5)
+
+        self.storage_id_combo.pack(side="left", padx=5)
 
 
         tk.Label(
@@ -1579,8 +1594,8 @@ class FileListerApp:
             )
 
     def export_to_sqlite(self):
-        if hasattr(self, "storage_id_entry"):
-            self.storage_id_entry.config(state="disabled")
+        if hasattr(self, "storage_id_combo"):
+            self.storage_id_combo.config(state="disabled")
 
         if not self.all_files_info:
             messagebox.showinfo("Info", "No files to export.")
@@ -1687,8 +1702,9 @@ class FileListerApp:
             messagebox.showerror("Error", f"SQLite export failed: {e}")
 
         finally:
-            if hasattr(self, "storage_id_entry"):
-                self.storage_id_entry.config(state="normal")
+            if hasattr(self, "storage_id_combo"):
+                self.storage_id_combo.config(state="normal")
+
 
     def open_bulk_category_editor(self):
         if not self.current_db_path:
@@ -1792,19 +1808,25 @@ class FileListerApp:
                 ORDER BY storage_id
             """)
 
-            rows = cur.fetchall()
-            conn.close()
+            ids = [r[0] for r in cur.fetchall()]
 
-            ids = ["ALL"] + [r[0] for r in rows]
+            # ---------- SQLite Viewer tab combo ----------
+            self.available_storage_ids = ["ALL"] + ids
+            self.storage_filter_combo["values"] = self.available_storage_ids
 
-            self.available_storage_ids = ids
-            self.storage_filter_combo["values"] = ids
-
-            if self.selected_storage_filter.get() not in ids:
+            if self.selected_storage_filter.get() not in self.available_storage_ids:
                 self.selected_storage_filter.set("ALL")
+
+            # ---------- File Lister tab combo (NEW) ----------
+            if hasattr(self, "storage_id_combo"):
+                self.storage_id_combo["values"] = ids
 
         except Exception as e:
             print("Storage ID dropdown load error:", e)
+
+        finally:
+            conn.close()
+
 
 
     def setup_db_viewer_tab(self, parent):
