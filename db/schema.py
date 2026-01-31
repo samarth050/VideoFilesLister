@@ -29,11 +29,16 @@ CREATE TABLE IF NOT EXISTS Categories (
     name TEXT UNIQUE NOT NULL
 );
 """
-
-
 DB_SELECT_ALL = """
 SELECT id, file_name, extension, size_bytes, storage_id,
        creation_date, full_path, year, category
 FROM Files
 ORDER BY id DESC
+"""
+DB_SELECT_STORAGE_ID ="""
+SELECT id, file_name, extension, size_bytes, storage_id,
+        creation_date, full_path, year, category
+ FROM Files
+ WHERE storage_id = ?
+ ORDER BY id DESC
 """

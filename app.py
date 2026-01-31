@@ -15,7 +15,7 @@ Features:
 - Double-click open file (File list + DB viewer)
 - Only accepts video file types (mp4, mkv, avi, etc.)
 """
-from db.schema import FILES_TABLE_SQL, FILES_TABLE_INDEX, CATEGORIES_TABLE_SQL, DB_SELECT_ALL
+from db.schema import FILES_TABLE_SQL, FILES_TABLE_INDEX, CATEGORIES_TABLE_SQL, DB_SELECT_ALL, DB_SELECT_STORAGE_ID
 from db.database import init_db, ensure_global_unique_index
 from scanner.scanner import (
     get_files_info,
@@ -84,7 +84,7 @@ class ExportDialog:
         x = parent.winfo_rootx() + 100
         y = parent.winfo_rooty() + 100
         self.top.geometry(f"+{x}+{y}")
-        self.after(100, self.load_storage_ids_from_db)
+        #self.after(100, self.load_storage_ids_from_db)
 
 
     def on_ok(self):
@@ -102,7 +102,10 @@ class FileListerApp:
 
     def __init__(self, root):
         self.master_db_path = "VideoFiles.db"
-        self.current_db_path = self.master_db_path
+        settings = self.load_settings()
+        self.current_db_path = settings.get("last_db_path", self.master_db_path)
+
+        #self.current_db_path = self.master_db_path
 
         self.root = root
         self.root.title("Video File Lister")
@@ -131,7 +134,7 @@ class FileListerApp:
         self.file_paths = {}
 
         # SQLite viewer state
-        self.current_db_path = None
+        #self.current_db_path = None
         self.db_records_cache = []
         self.all_filtered_rows = []
         self.selected_storage_filter = tk.StringVar(value="ALL")
@@ -157,8 +160,6 @@ class FileListerApp:
             init_db(self.current_db_path, fresh=True)
             self.load_db_records()
                 # Load settings
-        settings = self.load_settings()
-        self.current_db_path = settings.get("last_db_path")
 
         # Build UI here (tabs, combo boxes, etc.)
 
@@ -291,13 +292,14 @@ class FileListerApp:
 
     def save_settings(self, data):
         settings = self.load_settings()
-        self.current_db_path = settings.get("last_db_path")
         settings.update(data)
+
         try:
             with open(self.CONFIG_FILE, "w") as f:
-                json.dump(settings, f)
-        except:
-            pass
+                json.dump(settings, f, indent=2)
+        except Exception as e:
+            print("Failed to save settings:", e)
+
 
     def setup_ui(self):
         self.notebook = ttk.Notebook(self.root)
@@ -489,6 +491,7 @@ class FileListerApp:
         )
 
         self.storage_id_combo.pack(side="left", padx=5)
+        self.storage_id_entry = self.storage_id_combo
 
 
         tk.Label(
@@ -1685,9 +1688,12 @@ class FileListerApp:
 
             conn.commit()
             conn.close()
-
-            self.save_settings({"last_db_path": db_path})
             self.current_db_path = db_path
+            self.save_settings({
+                "last_db_path": db_path,
+                "last_storage_id": storage_id
+            })
+            
             self.update_db_statistics()
             self.update_status_bar_db_info()
 
@@ -2390,13 +2396,7 @@ class FileListerApp:
             if selected_sid == "ALL":
                 cur.execute(DB_SELECT_ALL)
             else:
-                cur.execute("""
-                    SELECT id, file_name, extension, size_bytes, storage_id,
-                        creation_date, full_path, year, category
-                    FROM Files
-                    WHERE storage_id = ?
-                    ORDER BY id DESC
-                """, (selected_sid,))
+                cur.execute(DB_SELECT_STORAGE_ID, (selected_sid,))
 
             rows = cur.fetchall()
             conn.close()
@@ -2422,7 +2422,7 @@ class FileListerApp:
         self.load_category_dropdown()
 
         # ✅ refresh Storage ID dropdown
-        self.load_storage_ids_from_db()
+        #self.load_storage_ids_from_db()
 
 
 
