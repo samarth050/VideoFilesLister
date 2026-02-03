@@ -147,6 +147,11 @@ class FileListerApp:
         self._db_sort_reverse = {}
         self.storage_id_var = tk.StringVar(value="UNKNOWN")
 
+        # --- Duplicate pagination ---
+        self.dup_all_rows = []
+        self.dup_current_page = 0
+        self.dup_total_pages = 0
+
 
         self.setup_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -1043,12 +1048,66 @@ class FileListerApp:
 
 
         self.dup_tree.pack(fill="both", expand=True, padx=5, pady=5)
+        # --- Duplicate pager ---
+        pager = tk.Frame(parent)
+        pager.pack(fill="x", pady=4)
+
+        tk.Button(pager, text="|< First", command=self.first_dup_page).pack(side="left", padx=4)
+        tk.Button(pager, text="<< Prev", command=self.prev_dup_page).pack(side="left", padx=4)
+        tk.Button(pager, text="Next >>", command=self.next_dup_page).pack(side="left", padx=4)
+        tk.Button(pager, text="Last >|", command=self.last_dup_page).pack(side="left", padx=4)
+
+        self.dup_page_label = tk.Label(pager, text="Page 0 / 0")
+        self.dup_page_label.pack(side="left", padx=8)
+
+    def show_dup_page(self, page_num):
+        self.dup_tree.delete(*self.dup_tree.get_children())
+
+        if not self.dup_all_rows:
+            self.dup_page_label.config(text="Page 0 / 0")
+            return
+
+        page_num = max(0, min(page_num, self.dup_total_pages - 1))
+        self.dup_current_page = page_num
+
+        start = page_num * self.page_size
+        end = start + self.page_size
+
+        for item in self.dup_all_rows[start:end]:
+            if item[0] == "header":
+                _, values, tags = item
+                self.dup_tree.insert("", "end", values=values, tags=tags)
+            else:
+                _, values, tags, iid = item
+                self.dup_tree.insert("", "end", iid=iid, values=values, tags=tags)
+
+        self.dup_page_label.config(
+            text=f"Page {self.dup_current_page + 1} / {self.dup_total_pages}"
+        )
+
+    def first_dup_page(self):
+        self.show_dup_page(0)
+
+    def last_dup_page(self):
+        self.show_dup_page(self.dup_total_pages - 1)
+
+    def next_dup_page(self):
+        if self.dup_current_page + 1 < self.dup_total_pages:
+            self.show_dup_page(self.dup_current_page + 1)
+
+    def prev_dup_page(self):
+        if self.dup_current_page > 0:
+            self.show_dup_page(self.dup_current_page - 1)
+
 
     def load_duplicate_records(self):
         if not self.current_db_path:
             return
 
         self.dup_tree.delete(*self.dup_tree.get_children())
+        self.dup_tree.delete(*self.dup_tree.get_children())
+        self.dup_all_rows.clear()
+
 
         try:
             conn = sqlite3.connect(self.current_db_path)
@@ -1083,18 +1142,24 @@ class FileListerApp:
                     potential_saving += deletable
 
                 # -------- group header --------
+                """
                 self.dup_tree.insert(
                     "", "end",
                     values=(f"[{group['type']}]", "", "", "", "", "", "", ""),
                     tags=("group_header",)
                 )
+                """
+                self.dup_all_rows.append((
+                    "header",
+                    (f"[{group['type']}]", "", "", "", "", "", "", ""),
+                    ("group_header",)
+                ))
 
                 # -------- records --------
                 for rec in records:
-                    self.dup_tree.insert(
-                        "", "end",
-                        iid=f"dup_{rec['id']}",
-                        values=(
+                    self.dup_all_rows.append((
+                        "row",
+                        (
                             group["type"],
                             rec["id"],
                             rec["file_name"],
@@ -1104,8 +1169,9 @@ class FileListerApp:
                             rec["full_path"],
                             rec["creation_date"]
                         ),
-                        tags=(row_tag,)
-                    )
+                        (row_tag,),
+                        f"dup_{rec['id']}"
+                    ))
                     total += 1
 
             saved_str = format_bytes(potential_saving)
@@ -1117,6 +1183,11 @@ class FileListerApp:
 
         except Exception as e:
             self.status_var.set(f"Duplicate scan error: {e}")
+        total = len(self.dup_all_rows)
+        self.dup_total_pages = (total - 1) // self.page_size + 1 if total > 0 else 1
+        self.dup_current_page = 0
+        self.show_dup_page(0)
+    
 
 
 
