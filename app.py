@@ -1764,9 +1764,13 @@ class FileListerApp:
                 "last_db_path": db_path,
                 "last_storage_id": storage_id
             })
-            
+
             self.update_db_statistics()
             self.update_status_bar_db_info()
+
+            # ✅ AUTO refresh SQLite tab after export
+            self.current_page = 0
+            self.load_db_records()
 
             messagebox.showinfo(
                 "Export complete",
