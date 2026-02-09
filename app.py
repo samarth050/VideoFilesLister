@@ -2106,7 +2106,7 @@ class FileListerApp:
             key = (name.lower(), int(sizeb))
 
             if key not in disk_index:
-                problems.append((rid, name, sizeb, old_path, "Missing on disk"))
+                problems.append((rid, name, format_bytes(sizeb), old_path, "Missing on disk"))
 
         # ---- Load ALL DB rows for cross-storage detection ----
         conn = sqlite3.connect(self.current_db_path)
@@ -2145,7 +2145,7 @@ class FileListerApp:
                     problems.append((
                         "—",
                         base,
-                        size,
+                        format_bytes(size),
                         p,
                         msg
                     ))
