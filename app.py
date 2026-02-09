@@ -114,7 +114,7 @@ class FileListerApp:
         # Allowed video types
         self.allowed_video_exts = {
             ".mp4", ".mkv", ".avi", ".mov", ".mpg", ".mpeg",
-            ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".divx"
+            ".wmv", ".flv", ".webm", ".m4v", ".3gp", ".ts", ".divx","dvd"
         }
 
         self.known_video_exts = {
@@ -2082,6 +2082,19 @@ class FileListerApp:
                 key = (base.lower(), size)
                 disk_index.setdefault(key, []).append(full)
 
+        # ---- Scan disk for DVD folders ----
+        dvd_disk_index = {}
+
+        for root, dirs, files in os.walk(scan_root):
+            if "VIDEO_TS" in dirs:
+                dvd_root = root
+                dvd_name = os.path.basename(dvd_root).lower()
+                size = get_folder_size_bytes(dvd_root)
+
+                dvd_disk_index[(dvd_name, size)] = dvd_root
+
+                # 🚫 do not descend into VIDEO_TS
+                dirs[:] = []
 
         # ---- Load DB rows for selected storage id ----
         conn = sqlite3.connect(self.current_db_path)
@@ -2103,10 +2116,33 @@ class FileListerApp:
         problems = []
 
         for rid, name, ext, sizeb, old_path in rows:
+
+            # -------- DVD record --------
+            if ext.upper() == "DVD":
+                key = (name.lower(), int(sizeb))
+
+                if key not in dvd_disk_index:
+                    problems.append((
+                        rid,
+                        name,
+                        format_bytes(sizeb),
+                        old_path,
+                        "DVD folder missing or VIDEO_TS not found"
+                    ))
+                continue
+
+            # -------- Normal file --------
             key = (name.lower(), int(sizeb))
 
             if key not in disk_index:
-                problems.append((rid, name, format_bytes(sizeb), old_path, "Missing on disk"))
+                problems.append((
+                    rid,
+                    name,
+                    format_bytes(sizeb),
+                    old_path,
+                    "Missing on disk"
+                ))
+
 
         # ---- Load ALL DB rows for cross-storage detection ----
         conn = sqlite3.connect(self.current_db_path)
@@ -2129,6 +2165,11 @@ class FileListerApp:
             (name.lower(), int(sizeb))
             for _, name, ext, sizeb, _ in rows
         )
+        db_dvd_index = set(
+            (name.lower(), int(sizeb))
+            for _, name, ext, sizeb, _ in rows
+            if ext.upper() == "DVD"
+        )
 
         for (base, size), paths in disk_index.items():
             key = (base, size)
@@ -2149,7 +2190,19 @@ class FileListerApp:
                         p,
                         msg
                     ))
-              
+        # -------- Disk DVD → DB check --------
+        for (dvd_name, dvd_size), dvd_path in dvd_disk_index.items():
+            key = (dvd_name, dvd_size)
+
+            if key not in db_dvd_index:
+                problems.append((
+                    "—",
+                    dvd_name,
+                    format_bytes(dvd_size),
+                    dvd_path,
+                    "DVD exists on disk but missing in DB"
+                ))
+
         if not problems:
             messagebox.showinfo("Verification Complete",
                                 "No discrepancies found for this disk.")

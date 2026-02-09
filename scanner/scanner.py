@@ -2,10 +2,12 @@ import os
 import datetime
 import re
 import ctypes
+from utils.helpers import get_folder_size_bytes
 
 def get_files_info(folder, allowed_video_exts, include_subdirs):
         results = []
-
+        # ✅ Track DVD folders already processed
+        dvd_movies = set()
         def process_file(path, f):
             try:
                 size = os.path.getsize(path)
@@ -42,16 +44,50 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
 
         # ---- include subfolders ----
         if include_subdirs:
-            for root, _, files in os.walk(folder):
+            for root, dirs, files in os.walk(folder):
+
+                # -------- DVD detection --------
+                if "VIDEO_TS" in dirs:
+                    dvd_root = root
+                    movie_name = os.path.basename(dvd_root)
+
+                    if dvd_root not in dvd_movies:
+                        dvd_movies.add(dvd_root)
+
+                        size = get_folder_size_bytes(dvd_root)
+                        cdate = datetime.datetime.fromtimestamp(
+                            os.path.getctime(dvd_root)
+                        ).strftime("%Y-%m-%d %H:%M:%S")
+
+                        results.append({
+                            "name_without_ext": movie_name,
+                            "full_path": dvd_root,
+                            "extension": "DVD",
+                            "size": size,
+                            "creation_date": cdate,
+                            "year": None,
+                            "category": None,
+                            "tracked": True
+                        })
+
+                    # 🚫 Do not descend into VIDEO_TS
+                    dirs[:] = []
+                    continue
+
+                # -------- Normal video files --------
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
 
-                    # only allowed video files
+                    # skip VOBs explicitly
+                    if ext == ".vob":
+                        continue
+
                     if ext not in allowed_video_exts:
                         continue
 
                     path = os.path.join(root, f)
                     process_file(path, f)
+
 
         # ---- only selected folder ----
         else:

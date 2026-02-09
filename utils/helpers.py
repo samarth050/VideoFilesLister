@@ -1,3 +1,4 @@
+import os
 import datetime
 
 def format_size(size_bytes):
@@ -46,4 +47,14 @@ def format_bytes(size):
     elif size >= gb:
         return f"{size / gb:.2f} GB"
     else:
-        return f"{size / mb:.2f} MB"    
+        return f"{size / mb:.2f} MB"
+
+def get_folder_size_bytes(folder_path):
+    total = 0
+    for root, _, files in os.walk(folder_path):
+        for f in files:
+            try:
+                total += os.path.getsize(os.path.join(root, f))
+            except:
+                pass
+    return total
