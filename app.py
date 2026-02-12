@@ -24,7 +24,7 @@ from scanner.scanner import (
     get_drive_label
 )
 from duplicates.duplicate_analyzer import analyze_duplicates
-from utils.helpers import format_size, format_bytes, format_db_total_size, format_date
+from utils.helpers import format_size, format_bytes, format_db_total_size, format_date, get_folder_size_bytes
 import os
 import json
 import sqlite3
