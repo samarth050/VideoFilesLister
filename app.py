@@ -336,6 +336,38 @@ class FileListerApp:
             self.update_status_bar_db_info()
             self.draw_extension_pie_chart()
 
+    def reset_scan(self):
+        """Clear scanned file results and reset UI"""
+
+        # Clear file table
+        self.file_table.delete(*self.file_table.get_children())
+
+        # Clear stored paths & scan cache
+        self.file_paths.clear()
+        self.all_files_info.clear()
+
+        # Clear folder selection
+        self.folder_path.set("")
+
+        # Reset file counters
+        self.files_count_var.set("Files: 0")
+        self.total_files_var.set("Total Files: 0")
+        self.total_size_var.set("Total Size: 0 MB")
+
+        # Clear statistics tables
+        if hasattr(self, "file_ext_tree"):
+            self.file_ext_tree.delete(*self.file_ext_tree.get_children())
+
+        if hasattr(self, "file_storage_tree"):
+            self.file_storage_tree.delete(*self.file_storage_tree.get_children())
+
+        # Clear file detail panel
+        for var in self.detail_vars.values():
+            var.set("")
+
+        # Reset status
+        self.status_var.set("Scan results cleared.")
+
 
     def setup_main_tab(self, parent):
         folder_frame = tk.Frame(parent)
@@ -346,6 +378,11 @@ class FileListerApp:
         tk.Entry(folder_frame, textvariable=self.folder_path, width=60).pack(side="left", padx=5)
 
         tk.Button(folder_frame, text="Browse", command=self.browse_folder).pack(side="left")
+        tk.Button(
+            folder_frame,
+            text="Reset Scan",
+            command=self.reset_scan
+        ).pack(side="left", padx=5)
 
         opt_frame = tk.Frame(parent)
         opt_frame.pack(fill="x", pady=5)
@@ -354,7 +391,6 @@ class FileListerApp:
         tk.Checkbutton(opt_frame, text="Include subdirectories", variable=self.include_subdirs).pack(side="left")
 
         tk.Button(opt_frame, text="List Files", command=self.list_files).pack(side="right")
-
 
         tk.Button(
                 opt_frame,
