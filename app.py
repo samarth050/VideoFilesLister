@@ -1468,10 +1468,16 @@ class FileListerApp:
 
     # ---------------- File scanning ----------------
     def browse_folder(self):
-        folder = filedialog.askdirectory()
-        if folder:
-            self.folder_path.set(folder)
-            self.status_var.set(f"Selected: {folder}")
+        folder_selected = filedialog.askdirectory()
+
+        if folder_selected:
+            # If a different folder is selected → auto reset
+            if self.folder_path.get() and self.folder_path.get() != folder_selected:
+                self.reset_scan()
+
+            self.folder_path.set(folder_selected)
+            self.status_var.set(f"Selected folder: {folder_selected}")
+
 
     def on_file_table_select(self, event):
         sel = self.file_table.selection()
