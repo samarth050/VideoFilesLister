@@ -19,6 +19,19 @@ CREATE TABLE IF NOT EXISTS Files (
     UNIQUE(file_name, size_bytes)
 );
 """
+MOVIE_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS MovieDetails (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    file_id INTEGER UNIQUE,
+    movie_name TEXT,
+    year TEXT,
+    category TEXT,
+    description TEXT,
+    image1_url TEXT,
+    image2_url TEXT,
+    FOREIGN KEY (file_id) REFERENCES Files(id)
+);
+"""
 FILES_TABLE_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_global
 ON Files (file_name, size_bytes);

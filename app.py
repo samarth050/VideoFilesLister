@@ -15,35 +15,70 @@ Features:
 - Double-click open file (File list + DB viewer)
 - Only accepts video file types (mp4, mkv, avi, etc.)
 """
-from db.schema import FILES_TABLE_SQL, FILES_TABLE_INDEX, CATEGORIES_TABLE_SQL, DB_SELECT_ALL, DB_SELECT_STORAGE_ID
-from db.database import init_db, ensure_global_unique_index
-from scanner.scanner import (
-    get_files_info,
-    detect_storage_id_from_path,
-    get_windows_drive_label,
-    get_drive_label
-)
-from duplicates.duplicate_analyzer import analyze_duplicates
-from utils.helpers import format_size, format_bytes, format_db_total_size, format_date, get_folder_size_bytes
+# ===============================
+# Standard Library
+# ===============================
 import os
 import json
 import sqlite3
+import re
 import ctypes
 import subprocess
 import sys
+import datetime
+from pathlib import Path
+from collections import defaultdict
+
+# ===============================
+# Third-Party Libraries
+# ===============================
+import pandas as pd
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
-import pandas as pd
-from pathlib import Path
-import datetime
-import re
-from collections import defaultdict
+
+from PIL import Image, ImageTk
+from io import BytesIO
+
 try:
     import matplotlib.pyplot as plt
     from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
+
+# ===============================
+# Internal Modules
+# ===============================
+from db.schema import (
+    FILES_TABLE_SQL,
+    MOVIE_TABLE_SQL,
+    FILES_TABLE_INDEX,
+    CATEGORIES_TABLE_SQL,
+    DB_SELECT_ALL,
+    DB_SELECT_STORAGE_ID
+)
+
+from db.database import init_db, ensure_global_unique_index
+
+from scanner.scanner import (
+    get_files_info,
+    detect_storage_id_from_path,
+    get_windows_drive_label,
+    get_drive_label
+)
+
+from duplicates.duplicate_analyzer import analyze_duplicates
+
+from utils.helpers import (
+    format_size,
+    format_bytes,
+    format_db_total_size,
+    format_date,
+    get_folder_size_bytes
+)
+
+from utils.movie_scraper import scrape_movie
+
 
 class ExportDialog:
     def __init__(self, parent, options):
@@ -135,6 +170,9 @@ class FileListerApp:
 
         # SQLite viewer state
         #self.current_db_path = None
+        self.selected_file_id = None
+        self.current_image_urls = []
+
         self.db_records_cache = []
         self.all_filtered_rows = []
         self.selected_storage_filter = tk.StringVar(value="ALL")
@@ -171,10 +209,132 @@ class FileListerApp:
         # Populate combos AFTER UI + DB are ready
         self.root.after(100, self.load_storage_ids_from_db)
 
-    
+    def display_image(self, url, label_widget):
+        from PIL import Image, ImageTk
+        from io import BytesIO
+        import requests
 
-  
- 
+        try:
+            headers = {
+                "User-Agent": "Mozilla/5.0",
+                "Referer": "https://rarelust.com/"
+            }
+
+            response = requests.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+
+            img_data = BytesIO(response.content)
+            pil_image = Image.open(img_data)
+            pil_image.thumbnail((200, 300))
+
+            tk_image = ImageTk.PhotoImage(pil_image)
+
+            label_widget.config(image=tk_image)
+            label_widget.image = tk_image  # VERY IMPORTANT
+
+        except Exception as e:
+            print("Image load error:", e)
+
+    def fetch_metadata(self):
+        if not self.selected_file_id:
+            messagebox.showwarning("Select Record", "Select a record first.")
+            return
+
+        url = self.meta_url_var.get().strip()
+
+        if not url:
+            messagebox.showwarning("URL Required", "Paste metadata URL.")
+            return
+
+        try:
+            data = scrape_movie(url)
+
+            # Update text fields
+            self.category_var.set(data["category"])
+
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", data["description"])
+
+            # Store image URLs
+            self.current_image_urls = data["images"]
+
+            # 🔥 CLEAR OLD IMAGES FIRST
+            self.image_label1.config(image="")
+            self.image_label1.image = None
+
+            self.image_label2.config(image="")
+            self.image_label2.image = None
+
+            # 🔥 DISPLAY IMMEDIATELY
+            if len(self.current_image_urls) > 0:
+                self.display_image(self.current_image_urls[0], self.image_label1)
+
+            if len(self.current_image_urls) > 1:
+                self.display_image(self.current_image_urls[1], self.image_label2)
+
+            self.status_var.set("Metadata fetched successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+
+
+   
+    def save_metadata(self):
+        if not self.selected_file_id:
+            messagebox.showwarning("Select Record", "Select a record first.")
+            return
+
+        if not self.current_db_path:
+            messagebox.showwarning("No DB", "Open a database first.")
+            return
+
+        category = self.category_var.get().strip()
+        description = self.description_text.get("1.0", tk.END).strip()
+
+        image1 = self.current_image_urls[0] if len(self.current_image_urls) > 0 else None
+        image2 = self.current_image_urls[1] if len(self.current_image_urls) > 1 else None
+
+        try:
+            with sqlite3.connect(self.current_db_path) as conn:
+                cur = conn.cursor()
+
+                # 1️⃣ Update MovieDetails table
+                cur.execute("""
+                    INSERT INTO MovieDetails
+                    (file_id, category, description, image1_url, image2_url)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(file_id) DO UPDATE SET
+                        category = excluded.category,
+                        description = excluded.description,
+                        image1_url = excluded.image1_url,
+                        image2_url = excluded.image2_url
+                """, (
+                    self.selected_file_id,
+                    category,
+                    description,
+                    image1,
+                    image2
+                ))
+
+                # 2️⃣ Sync category to Files table
+                cur.execute("""
+                    UPDATE Files
+                    SET category = ?
+                    WHERE id = ?
+                """, (
+                    category,
+                    self.selected_file_id
+                ))
+
+            self.status_var.set("Metadata saved and category synced.")
+            self.load_db_records()
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+
+
     def update_filelist_statistics(self, files_info):
         """
         files_info = self.all_files_info
@@ -1709,6 +1869,64 @@ class FileListerApp:
                 f"Failed to update Storage ID:\n{e}"
             )
 
+    def load_movie_metadata(self, file_id):
+        if not self.current_db_path:
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT category, description, image1_url, image2_url
+                FROM MovieDetails
+                WHERE file_id = ?
+            """, (file_id,))
+
+            row = cur.fetchone()
+            conn.close()
+
+            # Clear panel first
+            self.category_var.set("")
+            self.description_text.delete("1.0", tk.END)
+            self.current_image_urls = []
+
+            if row:
+                category, description, img1, img2 = row
+
+                if category:
+                    self.category_var.set(category)
+
+                if description:
+                    self.description_text.insert("1.0", description)
+
+                if img1:
+                    self.current_image_urls.append(img1)
+
+                if img2:
+                    self.current_image_urls.append(img2)
+
+        except Exception as e:
+            print("Metadata load error:", e)
+        # If you have image display labels
+        if hasattr(self, "image_label1"):
+            self.image_label1.config(image="")
+            self.image_label2.config(image="")
+
+            # Clear old images
+            self.image_label1.config(image="")
+            self.image_label2.config(image="")
+            self.image_label1.image = None
+            self.image_label2.image = None
+
+            # Display new ones
+            if len(self.current_image_urls) > 0:
+                self.display_image(self.current_image_urls[0], self.image_label1)
+
+            if len(self.current_image_urls) > 1:
+                self.display_image(self.current_image_urls[1], self.image_label2)
+
+ 
     def export_to_sqlite(self):
         if hasattr(self, "storage_id_combo"):
             self.storage_id_combo.config(state="disabled")
@@ -1725,6 +1943,7 @@ class FileListerApp:
 
             # Ensure table & indexes exist (updated schema)
             cur.execute(FILES_TABLE_SQL)
+            cur.execute(MOVIE_TABLE_SQL)
             cur.execute(FILES_TABLE_INDEX)
             cur.execute(CATEGORIES_TABLE_SQL)
 
@@ -1950,6 +2169,95 @@ class FileListerApp:
         finally:
             conn.close()
 
+    def clear_metadata_panel(self):
+        self.category_var.set("")
+        self.description_text.delete("1.0", tk.END)
+
+        # 🔥 Clear metadata URL
+        if hasattr(self, "meta_url_var"):
+            self.meta_url_var.set("")
+
+        if hasattr(self, "image_label1"):
+            self.image_label1.config(image="")
+            self.image_label1.image = None
+
+        if hasattr(self, "image_label2"):
+            self.image_label2.config(image="")
+            self.image_label2.image = None
+
+        self.current_image_urls = []
+
+
+
+    def load_movie_metadata(self, file_id):
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT category, description, image1_url, image2_url
+            FROM MovieDetails
+            WHERE file_id = ?
+        """, (file_id,))
+
+        row = cur.fetchone()
+        conn.close()
+
+        # Clear old UI content first
+        self.category_var.set("")
+        self.description_text.delete("1.0", tk.END)
+
+        # Clear previous images
+        if hasattr(self, "image_label1"):
+            self.image_label1.config(image="")
+            self.image_label1.image = None
+
+        if hasattr(self, "image_label2"):
+            self.image_label2.config(image="")
+            self.image_label2.image = None
+
+        self.current_image_urls = []
+
+        if row:
+            category, description, img1, img2 = row
+
+            if category:
+                self.category_var.set(category)
+
+            if description:
+                self.description_text.insert("1.0", description)
+
+            if img1:
+                self.current_image_urls.append(img1)
+
+            if img2:
+                self.current_image_urls.append(img2)
+
+            # 👇 THIS WAS MISSING
+            if len(self.current_image_urls) > 0:
+                self.display_image(self.current_image_urls[0], self.image_label1)
+
+            if len(self.current_image_urls) > 1:
+                self.display_image(self.current_image_urls[1], self.image_label2)
+
+
+    def on_db_row_select(self, event):
+        selected = self.db_tree.selection()
+
+        if not selected:
+            self.selected_file_id = None
+            self.clear_metadata_panel()
+            return
+
+        item_id = selected[0]
+        tags = self.db_tree.item(item_id, "tags")
+
+        if tags:
+            self.selected_file_id = int(tags[0])
+            self.load_movie_metadata(self.selected_file_id)
+        else:
+            self.selected_file_id = None
+            self.clear_metadata_panel()
+
 
 
     def setup_db_viewer_tab(self, parent):
@@ -2023,6 +2331,7 @@ class FileListerApp:
 
         # ✅ CREATE TREE FIRST
         self.db_tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+        self.db_tree.bind("<<TreeviewSelect>>", self.on_db_row_select)
 
         # ✅ HEADINGS + SORT
         for c in cols:
@@ -2046,6 +2355,43 @@ class FileListerApp:
 
         pager = tk.Frame(parent)
         pager.pack(fill="x", pady=4)
+        # ---------------------------
+        # Metadata Details Frame
+        # ---------------------------
+        details_frame = tk.LabelFrame(parent, text="Movie Metadata", padx=8, pady=6)
+        details_frame.pack(fill="x", padx=8, pady=8)
+        # URL entry
+        ttk.Label(details_frame, text="Metadata URL:").pack(anchor="w")
+
+        self.meta_url_var = tk.StringVar()
+        ttk.Entry(details_frame, textvariable=self.meta_url_var).pack(fill="x", pady=3)
+
+        ttk.Button(details_frame, text="Fetch Metadata",
+                command=self.fetch_metadata).pack(pady=3)
+
+        # Category field
+        ttk.Label(details_frame, text="Category:").pack(anchor="w")
+        self.category_var = tk.StringVar()
+        ttk.Entry(details_frame, textvariable=self.category_var).pack(fill="x", pady=3)
+
+        # Description field
+        ttk.Label(details_frame, text="Description:").pack(anchor="w")
+        self.description_text = tk.Text(details_frame, height=6)
+        self.description_text.pack(fill="both", pady=3)
+
+        ttk.Button(details_frame, text="Save Metadata",
+                command=self.save_metadata).pack(pady=5)
+        
+        # Image preview frame
+        image_frame = tk.Frame(details_frame)
+        image_frame.pack(pady=6)
+
+        self.image_label1 = tk.Label(image_frame)
+        self.image_label1.pack(side="left", padx=10)
+
+        self.image_label2 = tk.Label(image_frame)
+        self.image_label2.pack(side="left", padx=10)
+
         tk.Button(pager, text="|< First", command=self.first_db_page).pack(side="left", padx=4)
         tk.Button(pager, text="<< Prev", command=self.prev_db_page).pack(side="left", padx=4)
         tk.Button(pager, text="Next >>", command=self.next_db_page).pack(side="left")
