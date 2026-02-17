@@ -1,3 +1,14 @@
+MOVIE_DETAILS_INSERT = """
+ INSERT INTO MovieDetails
+ (file_id, category, description, cover1_path, cover2_path, metadata_url)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(file_id) DO UPDATE SET
+        category=excluded.category,
+        description=excluded.description,
+        cover1_path=excluded.cover1_path,
+        cover2_path=excluded.cover2_path,
+        metadata_url=excluded.metadata_url
+"""
 FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS Files (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -43,15 +54,35 @@ CREATE TABLE IF NOT EXISTS Categories (
 );
 """
 DB_SELECT_ALL = """
-SELECT id, file_name, extension, size_bytes, storage_id,
-       creation_date, full_path, year, category
-FROM Files
-ORDER BY id DESC
+SELECT
+    f.id,
+    f.file_name,
+    f.extension,
+    f.size_bytes,
+    f.storage_id,
+    f.creation_date,
+    f.full_path,
+    f.year,
+    COALESCE(m.category, f.category) AS category
+FROM Files f
+LEFT JOIN MovieDetails m
+    ON f.id = m.file_id
+ORDER BY f.id DESC
 """
-DB_SELECT_STORAGE_ID ="""
-SELECT id, file_name, extension, size_bytes, storage_id,
-        creation_date, full_path, year, category
- FROM Files
- WHERE storage_id = ?
- ORDER BY id DESC
+DB_SELECT_STORAGE_ID = """
+SELECT
+    f.id,
+    f.file_name,
+    f.extension,
+    f.size_bytes,
+    f.storage_id,
+    f.creation_date,
+    f.full_path,
+    f.year,
+    COALESCE(m.category, f.category) AS category
+FROM Files f
+LEFT JOIN MovieDetails m
+    ON f.id = m.file_id
+WHERE f.storage_id = ?
+ORDER BY f.id DESC
 """

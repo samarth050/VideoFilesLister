@@ -38,6 +38,12 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 
 from PIL import Image, ImageTk
 from io import BytesIO
+import requests
+
+
+COVERS_DIR = os.path.join(os.getcwd(), "covers")
+os.makedirs(COVERS_DIR, exist_ok=True)
+
 
 try:
     import matplotlib.pyplot as plt
@@ -55,7 +61,8 @@ from db.schema import (
     FILES_TABLE_INDEX,
     CATEGORIES_TABLE_SQL,
     DB_SELECT_ALL,
-    DB_SELECT_STORAGE_ID
+    DB_SELECT_STORAGE_ID,
+    MOVIE_DETAILS_INSERT
 )
 
 from db.database import init_db, ensure_global_unique_index
@@ -171,7 +178,7 @@ class FileListerApp:
         # SQLite viewer state
         #self.current_db_path = None
         self.selected_file_id = None
-        self.current_image_urls = []
+        #self.current_image_urls = []
 
         self.db_records_cache = []
         self.all_filtered_rows = []
@@ -208,6 +215,7 @@ class FileListerApp:
 
         # Populate combos AFTER UI + DB are ready
         self.root.after(100, self.load_storage_ids_from_db)
+
 
     def display_image(self, url, label_widget):
         from PIL import Image, ImageTk
@@ -247,92 +255,161 @@ class FileListerApp:
             return
 
         try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            # 🔥 Check if metadata already exists
+            cur.execute("""
+                SELECT category, description, cover1_path, cover2_path, metadata_url
+                FROM MovieDetails
+                WHERE file_id=?
+            """, (self.selected_file_id,))
+
+            row = cur.fetchone()
+
+            # If already fetched and URL unchanged → Load from DB
+            if row and row[0] and row[4] == url:
+                self.category_var.set(row[0])
+
+                self.description_text.delete("1.0", tk.END)
+                self.description_text.insert("1.0", row[1])
+
+                if row[2] and os.path.exists(row[2]):
+                    self.display_image_from_file(row[2], self.image_label1)
+
+                if row[3] and os.path.exists(row[3]):
+                    self.display_image_from_file(row[3], self.image_label2)
+
+                self.status_var.set("Metadata loaded from local database.")
+                conn.close()
+                return
+
+            # ----------------------------
+            # SCRAPE (ONLY IF NOT STORED)
+            # ----------------------------
             data = scrape_movie(url)
 
-            # Update text fields
-            self.category_var.set(data["category"])
+            category = data["category"]
+            description = data["description"]
+            images = data["images"]
+
+            file_id = self.selected_file_id
+
+            img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
+            img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
+
+            # Download covers once
+            if len(images) > 0 and not os.path.exists(img1_path):
+                self.download_image(images[0], img1_path)
+
+            if len(images) > 1 and not os.path.exists(img2_path):
+                self.download_image(images[1], img2_path)
+
+            # Insert or Update MovieDetails
+            cur.execute(MOVIE_DETAILS_INSERT,(
+                file_id,
+                category,
+                description,
+                img1_path,
+                img2_path,
+                url
+            ))
+            # 🔥 IMPORTANT ADD THIS
+            cur.execute("""
+                UPDATE Files
+                SET category=?
+                WHERE id=?
+            """, (category, file_id))
+            conn.commit()
+            conn.close()
+
+            # Update UI
+            self.category_var.set(category)
 
             self.description_text.delete("1.0", tk.END)
-            self.description_text.insert("1.0", data["description"])
+            self.description_text.insert("1.0", description)
 
-            # Store image URLs
-            self.current_image_urls = data["images"]
+            self.display_image_from_file(img1_path, self.image_label1)
+            self.display_image_from_file(img2_path, self.image_label2)
 
-            # 🔥 CLEAR OLD IMAGES FIRST
-            self.image_label1.config(image="")
-            self.image_label1.image = None
-
-            self.image_label2.config(image="")
-            self.image_label2.image = None
-
-            # 🔥 DISPLAY IMMEDIATELY
-            if len(self.current_image_urls) > 0:
-                self.display_image(self.current_image_urls[0], self.image_label1)
-
-            if len(self.current_image_urls) > 1:
-                self.display_image(self.current_image_urls[1], self.image_label2)
-
-            self.status_var.set("Metadata fetched successfully.")
-
+            self.status_var.set("Metadata fetched and stored locally.")
+            self.load_db_records()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
+    def load_metadata_from_db(self):
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT category, description, cover1_path, cover2_path
+            FROM MovieDetails
+            WHERE file_id=?
+        """, (self.selected_file_id,))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            self.category_var.set(row[0] or "")
+
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", row[1] or "")
+
+            if row[2] and os.path.exists(row[2]):
+                self.display_image_from_file(row[2], self.image_label1)
+
+            if row[3] and os.path.exists(row[3]):
+                self.display_image_from_file(row[3], self.image_label2)
 
 
-   
+    def download_image(self, url, save_path):
+        try:
+            response = requests.get(url, timeout=10)
+            response.raise_for_status()
+
+            with open(save_path, "wb") as f:
+                f.write(response.content)
+
+            return True
+        except Exception as e:
+            print("Image download failed:", e)
+            return False
+
+    def display_image_from_file(self, image_path, label_widget):
+        try:
+            img = Image.open(image_path)
+            img = img.resize((200, 300))
+            photo = ImageTk.PhotoImage(img)
+
+            label_widget.configure(image=photo)
+            label_widget.image = photo
+        except Exception as e:
+            print("Image load failed:", e)
+
+  
     def save_metadata(self):
         if not self.selected_file_id:
-            messagebox.showwarning("Select Record", "Select a record first.")
-            return
-
-        if not self.current_db_path:
-            messagebox.showwarning("No DB", "Open a database first.")
             return
 
         category = self.category_var.get().strip()
         description = self.description_text.get("1.0", tk.END).strip()
 
-        image1 = self.current_image_urls[0] if len(self.current_image_urls) > 0 else None
-        image2 = self.current_image_urls[1] if len(self.current_image_urls) > 1 else None
+        conn = sqlite3.connect(self.current_db_path)
+        cur = conn.cursor()
 
-        try:
-            with sqlite3.connect(self.current_db_path) as conn:
-                cur = conn.cursor()
+        cur.execute("""
+            INSERT INTO MovieDetails (file_id, category, description)
+            VALUES (?, ?, ?)
+            ON CONFLICT(file_id) DO UPDATE SET
+                category=excluded.category,
+                description=excluded.description
+        """, (self.selected_file_id, category, description))
 
-                # 1️⃣ Update MovieDetails table
-                cur.execute("""
-                    INSERT INTO MovieDetails
-                    (file_id, category, description, image1_url, image2_url)
-                    VALUES (?, ?, ?, ?, ?)
-                    ON CONFLICT(file_id) DO UPDATE SET
-                        category = excluded.category,
-                        description = excluded.description,
-                        image1_url = excluded.image1_url,
-                        image2_url = excluded.image2_url
-                """, (
-                    self.selected_file_id,
-                    category,
-                    description,
-                    image1,
-                    image2
-                ))
+        conn.commit()
+        conn.close()
 
-                # 2️⃣ Sync category to Files table
-                cur.execute("""
-                    UPDATE Files
-                    SET category = ?
-                    WHERE id = ?
-                """, (
-                    category,
-                    self.selected_file_id
-                ))
-
-            self.status_var.set("Metadata saved and category synced.")
-            self.load_db_records()
-
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
-
+        self.status_var.set("Metadata saved.")
 
 
     def update_filelist_statistics(self, files_info):
@@ -1878,7 +1955,7 @@ class FileListerApp:
             cur = conn.cursor()
 
             cur.execute("""
-                SELECT category, description, image1_url, image2_url
+                SELECT category, description, cover1_path, cover2_path
                 FROM MovieDetails
                 WHERE file_id = ?
             """, (file_id,))
@@ -1889,42 +1966,39 @@ class FileListerApp:
             # Clear panel first
             self.category_var.set("")
             self.description_text.delete("1.0", tk.END)
-            self.current_image_urls = []
 
-            if row:
-                category, description, img1, img2 = row
+            if hasattr(self, "image_label1"):
+                self.image_label1.config(image="")
+                self.image_label1.image = None
 
-                if category:
-                    self.category_var.set(category)
+            if hasattr(self, "image_label2"):
+                self.image_label2.config(image="")
+                self.image_label2.image = None
 
-                if description:
-                    self.description_text.insert("1.0", description)
+            if not row:
+                return
 
-                if img1:
-                    self.current_image_urls.append(img1)
+            category, description, cover1_path, cover2_path = row
 
-                if img2:
-                    self.current_image_urls.append(img2)
+            # Load category
+            if category:
+                self.category_var.set(category)
+
+            # Load description
+            if description:
+                self.description_text.insert("1.0", description)
+
+            # Load images from local files
+            if cover1_path and os.path.exists(cover1_path):
+                self.display_image_from_file(cover1_path, self.image_label1)
+
+            if cover2_path and os.path.exists(cover2_path):
+                self.display_image_from_file(cover2_path, self.image_label2)
+
+            self.status_var.set("Metadata loaded from database.")
 
         except Exception as e:
             print("Metadata load error:", e)
-        # If you have image display labels
-        if hasattr(self, "image_label1"):
-            self.image_label1.config(image="")
-            self.image_label2.config(image="")
-
-            # Clear old images
-            self.image_label1.config(image="")
-            self.image_label2.config(image="")
-            self.image_label1.image = None
-            self.image_label2.image = None
-
-            # Display new ones
-            if len(self.current_image_urls) > 0:
-                self.display_image(self.current_image_urls[0], self.image_label1)
-
-            if len(self.current_image_urls) > 1:
-                self.display_image(self.current_image_urls[1], self.image_label2)
 
  
     def export_to_sqlite(self):
@@ -2173,10 +2247,11 @@ class FileListerApp:
         self.category_var.set("")
         self.description_text.delete("1.0", tk.END)
 
-        # 🔥 Clear metadata URL
+        # Clear metadata URL field (UI only)
         if hasattr(self, "meta_url_var"):
             self.meta_url_var.set("")
 
+        # Clear images safely
         if hasattr(self, "image_label1"):
             self.image_label1.config(image="")
             self.image_label1.image = None
@@ -2185,59 +2260,52 @@ class FileListerApp:
             self.image_label2.config(image="")
             self.image_label2.image = None
 
-        self.current_image_urls = []
-
+        # Reset selected file metadata state
+        #self.current_image_urls = None
 
 
     def load_movie_metadata(self, file_id):
-        conn = sqlite3.connect(self.current_db_path)
-        cur = conn.cursor()
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
 
-        cur.execute("""
-            SELECT category, description, image1_url, image2_url
-            FROM MovieDetails
-            WHERE file_id = ?
-        """, (file_id,))
+            cur.execute("""
+                SELECT category, description, cover1_path, cover2_path
+                FROM MovieDetails
+                WHERE file_id=?
+            """, (file_id,))
 
-        row = cur.fetchone()
-        conn.close()
+            row = cur.fetchone()
+            conn.close()
 
-        # Clear old UI content first
-        self.category_var.set("")
-        self.description_text.delete("1.0", tk.END)
+            # Clear UI first
+            self.clear_metadata_panel()
 
-        # Clear previous images
-        if hasattr(self, "image_label1"):
-            self.image_label1.config(image="")
-            self.image_label1.image = None
+            if not row:
+                return  # No metadata stored yet
 
-        if hasattr(self, "image_label2"):
-            self.image_label2.config(image="")
-            self.image_label2.image = None
+            category, description, cover1_path, cover2_path = row
 
-        self.current_image_urls = []
+            # Load text
+            self.category_var.set(category or "")
 
-        if row:
-            category, description, img1, img2 = row
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", description or "")
 
-            if category:
-                self.category_var.set(category)
+            # Load images from local files ONLY
+            if cover1_path and os.path.exists(cover1_path):
+                self.display_image_from_file(cover1_path, self.image_label1)
 
-            if description:
-                self.description_text.insert("1.0", description)
+            if cover2_path and os.path.exists(cover2_path):
+                self.display_image_from_file(cover2_path, self.image_label2)
 
-            if img1:
-                self.current_image_urls.append(img1)
+            self.status_var.set("Metadata loaded from local database.")
 
-            if img2:
-                self.current_image_urls.append(img2)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
-            # 👇 THIS WAS MISSING
-            if len(self.current_image_urls) > 0:
-                self.display_image(self.current_image_urls[0], self.image_label1)
 
-            if len(self.current_image_urls) > 1:
-                self.display_image(self.current_image_urls[1], self.image_label2)
+
 
 
     def on_db_row_select(self, event):
@@ -2366,8 +2434,14 @@ class FileListerApp:
         self.meta_url_var = tk.StringVar()
         ttk.Entry(details_frame, textvariable=self.meta_url_var).pack(fill="x", pady=3)
 
-        ttk.Button(details_frame, text="Fetch Metadata",
-                command=self.fetch_metadata).pack(pady=3)
+        btn_frame = tk.Frame(details_frame)
+        btn_frame.pack(pady=4)
+
+        ttk.Button(btn_frame, text="Fetch Metadata",
+                command=self.fetch_metadata).pack(side="left", padx=5)
+
+        ttk.Button(btn_frame, text="🔄 Refresh Metadata",
+                command=self.refresh_metadata).pack(side="left", padx=5)
 
         # Category field
         ttk.Label(details_frame, text="Category:").pack(anchor="w")
@@ -2398,6 +2472,103 @@ class FileListerApp:
         tk.Button(pager, text="Last >|", command=self.last_db_page).pack(side="left", padx=4)
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
+
+    def refresh_metadata(self):
+        confirm = messagebox.askyesno(
+            "Confirm Refresh",
+            "This will overwrite existing metadata.\nContinue?"
+        )
+        if not confirm:
+            return
+        if not self.selected_file_id:
+            messagebox.showwarning("Select Record", "Select a record first.")
+            return
+
+        try:
+            conn = sqlite3.connect(self.current_db_path)
+            cur = conn.cursor()
+
+            # Get stored metadata_url
+            cur.execute("""
+                SELECT metadata_url
+                FROM MovieDetails
+                WHERE file_id=?
+            """, (self.selected_file_id,))
+
+            row = cur.fetchone()
+
+            if not row or not row[0]:
+                messagebox.showwarning(
+                    "No URL Found",
+                    "No stored metadata URL for this record."
+                )
+                conn.close()
+                return
+
+            url = row[0]
+
+            self.status_var.set("Refreshing metadata from internet...")
+            self.root.update_idletasks()
+
+            # 🔥 Scrape again
+            data = scrape_movie(url)
+
+            category = data["category"]
+            description = data["description"]
+            images = data["images"]
+
+            file_id = self.selected_file_id
+
+            img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
+            img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
+
+            # 🔥 Overwrite covers
+            if len(images) > 0:
+                self.download_image(images[0], img1_path)
+
+            if len(images) > 1:
+                self.download_image(images[1], img2_path)
+
+            # 🔥 Update MovieDetails
+            cur.execute("""
+                UPDATE MovieDetails
+                SET category=?,
+                    description=?,
+                    cover1_path=?,
+                    cover2_path=?
+                WHERE file_id=?
+            """, (
+                category,
+                description,
+                img1_path,
+                img2_path,
+                file_id
+            ))
+
+            # 🔥 Update Files table category (if you're syncing)
+            cur.execute("""
+                UPDATE Files
+                SET category=?
+                WHERE id=?
+            """, (category, file_id))
+
+            conn.commit()
+            conn.close()
+
+            # Update UI
+            self.category_var.set(category)
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", description)
+
+            self.display_image_from_file(img1_path, self.image_label1)
+            self.display_image_from_file(img2_path, self.image_label2)
+
+            self.load_db_records()
+
+            self.status_var.set("Metadata refreshed successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
 
     def recreate_database(self):
