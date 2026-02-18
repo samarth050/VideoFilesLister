@@ -55,6 +55,7 @@ except ImportError:
 # ===============================
 # Internal Modules
 # ===============================
+
 from db.schema import (
     FILES_TABLE_SQL,
     MOVIE_TABLE_SQL,
@@ -62,8 +63,22 @@ from db.schema import (
     CATEGORIES_TABLE_SQL,
     DB_SELECT_ALL,
     DB_SELECT_STORAGE_ID,
-    MOVIE_DETAILS_INSERT
+    MOVIE_DETAILS_INSERT,
+    SELECT_MOVIE_METADATA_FULL,
+    SELECT_MOVIE_METADATA,
+    UPDATE_FILES_CATEGORY,
+    UPDATE_FILE_MOVE,
+    INSERT_FILE_RECORD,
+    DELETE_FILE_BY_ID,
+    SELECT_STORAGE_STATS,
+    SELECT_TOTAL_COUNT,
+    SELECT_TOTAL_SIZE,
+    SELECT_EXTENSION_STATS,
+    SELECT_ALL_CATEGORIES,
+    INSERT_CATEGORY,
+    SELECT_DISTINCT_FILE_CATEGORIES
 )
+
 
 from db.database import init_db, ensure_global_unique_index
 
@@ -264,11 +279,7 @@ class FileListerApp:
             cur = conn.cursor()
 
             # 🔥 Check if metadata already exists
-            cur.execute("""
-                SELECT category, description, cover1_path, cover2_path, metadata_url
-                FROM MovieDetails
-                WHERE file_id=?
-            """, (self.selected_file_id,))
+            cur.execute(SELECT_MOVIE_METADATA_FULL, (self.selected_file_id,))
 
             row = cur.fetchone()
 
@@ -346,11 +357,7 @@ class FileListerApp:
         conn = self.get_connection()
         cur = conn.cursor()
 
-        cur.execute("""
-            SELECT category, description, cover1_path, cover2_path
-            FROM MovieDetails
-            WHERE file_id=?
-        """, (self.selected_file_id,))
+        cur.execute(SELECT_MOVIE_METADATA, (self.selected_file_id,))
 
         row = cur.fetchone()
         conn.close()
@@ -502,14 +509,7 @@ class FileListerApp:
             conn = self.get_connection()
             cur = conn.cursor()
 
-            cur.execute("""
-                SELECT storage_id,
-                    COUNT(*) AS cnt,
-                    SUM(size_bytes) AS total_size
-                FROM Files
-                GROUP BY storage_id
-                ORDER BY storage_id
-            """)
+            cur.execute(SELECT_STORAGE_STATS)
 
             rows = cur.fetchall()
             conn.close()
@@ -1160,7 +1160,7 @@ class FileListerApp:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("SELECT name FROM Categories ORDER BY name")
+            cur.execute(SELECT_ALL_CATEGORIES)
             rows = cur.fetchall()
             conn.close()
             return [r[0] for r in rows]
@@ -1173,7 +1173,7 @@ class FileListerApp:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("INSERT OR IGNORE INTO Categories(name) VALUES (?)", (name.strip(),))
+            cur.execute(INSERT_CATEGORY, (name.strip(),))
             conn.commit()
             conn.close()
             return True
@@ -1539,14 +1539,7 @@ class FileListerApp:
         try:
             conn = self.get_connection()
 
-            stats_df = pd.read_sql_query("""
-                SELECT extension,
-                    COUNT(*) AS count,
-                    SUM(size_bytes) AS total_size_bytes
-                FROM Files
-                GROUP BY extension
-                ORDER BY extension
-             """, conn)
+            stats_df = pd.read_sql_query(SELECT_EXTENSION_STATS, conn)
 
             summary_df = pd.DataFrame([{
                 "Total Records": stats_df["count"].sum(),
@@ -1649,12 +1642,12 @@ class FileListerApp:
             cur = conn.cursor()
            
             # Total records
-            cur.execute("SELECT COUNT(*) FROM Files")
+            cur.execute(SELECT_TOTAL_COUNT)
             total = cur.fetchone()[0]
             self.db_total_records_var.set(f"DB Records: {total}")
 
             # Total size of ALL files in DB
-            cur.execute("SELECT IFNULL(SUM(size_bytes),0) FROM Files")
+            cur.execute(SELECT_TOTAL_SIZE)
             total_bytes = cur.fetchone()[0]
 
             formatted = format_db_total_size(total_bytes)
@@ -1663,14 +1656,7 @@ class FileListerApp:
             )
 
             # Per-extension stats
-            cur.execute("""
-                SELECT extension,
-                   COUNT(*) AS cnt,
-                   SUM(size_bytes) AS total_size
-                FROM Files
-                GROUP BY extension
-                ORDER BY extension
-                """)
+            cur.execute(SELECT_EXTENSION_STATS)
             rows = cur.fetchall()
             conn.close()
 
@@ -1696,7 +1682,7 @@ class FileListerApp:
             cur = conn.cursor()
             
 
-            cur.execute("SELECT COUNT(*) FROM Files")
+            cur.execute(SELECT_TOTAL_COUNT)
             total = cur.fetchone()[0]
             conn.close()
 
@@ -1817,10 +1803,7 @@ class FileListerApp:
         for v in self.detail_vars.values():
             v.set("")
 
- 
-
-    
-
+  
     def open_file(self, path):
         try:
             if sys.platform.startswith("win"):
@@ -1976,11 +1959,7 @@ class FileListerApp:
             conn = self.get_connection()
             cur = conn.cursor()
 
-            cur.execute("""
-                SELECT category, description, cover1_path, cover2_path
-                FROM MovieDetails
-                WHERE file_id = ?
-            """, (file_id,))
+            cur.execute(SELECT_MOVIE_METADATA, (file_id,))
 
             row = cur.fetchone()
             conn.close()
@@ -2051,19 +2030,6 @@ class FileListerApp:
                 WHERE file_name=? AND size_bytes=?
             """
 
-            insert_q = """
-                INSERT INTO Files
-                (file_name, extension, size_bytes, storage_id,
-                creation_date, full_path, year, category)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """
-
-            update_q = """
-                UPDATE Files
-                SET storage_id=?, full_path=?, creation_date=?
-                WHERE id=?
-            """
-
             new_count = 0
             moved_count = 0
             waste_duplicates = 0
@@ -2084,7 +2050,7 @@ class FileListerApp:
 
                 if row is None:
                     # ✅ Brand new movie
-                    cur.execute(insert_q, (
+                    cur.execute(INSERT_FILE_RECORD, (
                         file_name,
                         f["extension"],
                         size,
@@ -2102,7 +2068,7 @@ class FileListerApp:
                     if db_storage == storage_id:
                         if db_path_existing != full_path:
                             # 🔄 Movie moved
-                            cur.execute(update_q, (
+                            cur.execute(UPDATE_FILE_MOVE, (
                                 storage_id,
                                 full_path,
                                 creation_date,
@@ -2221,7 +2187,7 @@ class FileListerApp:
         try:
             conn = self.get_connection()
             cur = conn.cursor()
-            cur.execute("SELECT DISTINCT category FROM Files ORDER BY category")
+            cur.execute(SELECT_DISTINCT_FILE_CATEGORIES)
             cats = [r[0] for r in cur.fetchall() if r[0]]
             conn.close()
         except:

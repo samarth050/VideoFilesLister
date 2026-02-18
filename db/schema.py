@@ -1,3 +1,82 @@
+# Movie Detail Queries
+SELECT_MOVIE_METADATA_FULL = """
+SELECT category, description, cover1_path, cover2_path, metadata_url
+FROM MovieDetails
+WHERE file_id = ?
+"""
+
+SELECT_MOVIE_METADATA = """
+SELECT category, description, cover1_path, cover2_path
+FROM MovieDetails
+WHERE file_id = ?
+"""
+# File Operations
+UPDATE_FILES_CATEGORY = """
+UPDATE Files
+SET category = ?
+WHERE id = ?
+"""
+
+UPDATE_FILE_MOVE = """
+UPDATE Files
+SET storage_id = ?, full_path = ?, creation_date = ?
+WHERE id = ?
+"""
+
+INSERT_FILE_RECORD = """
+INSERT INTO Files
+(file_name, extension, size_bytes, storage_id,
+ creation_date, full_path, year, category)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+"""
+
+DELETE_FILE_BY_ID = """
+DELETE FROM Files
+WHERE id = ?
+"""
+
+# Statistic Queries
+SELECT_STORAGE_STATS = """
+SELECT storage_id,
+       COUNT(*) AS cnt,
+       SUM(size_bytes) AS total_size
+FROM Files
+GROUP BY storage_id
+ORDER BY storage_id
+"""
+
+SELECT_TOTAL_COUNT = "SELECT COUNT(*) FROM Files"
+
+SELECT_TOTAL_SIZE = "SELECT IFNULL(SUM(size_bytes),0) FROM Files"
+
+SELECT_EXTENSION_STATS = """
+SELECT extension,
+       COUNT(*) AS cnt,
+       SUM(size_bytes) AS total_size
+FROM Files
+GROUP BY extension
+ORDER BY extension
+"""
+
+# Category Queries
+SELECT_ALL_CATEGORIES = """
+SELECT name
+FROM Categories
+ORDER BY name
+"""
+
+INSERT_CATEGORY = """
+INSERT OR IGNORE INTO Categories(name)
+VALUES (?)
+"""
+
+SELECT_DISTINCT_FILE_CATEGORIES = """
+SELECT DISTINCT category
+FROM Files
+ORDER BY category
+"""
+
+
 MOVIE_DETAILS_INSERT = """
  INSERT INTO MovieDetails
  (file_id, category, description, cover1_path, cover2_path, metadata_url)
