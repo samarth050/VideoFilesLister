@@ -216,6 +216,11 @@ class FileListerApp:
         # Populate combos AFTER UI + DB are ready
         self.root.after(100, self.load_storage_ids_from_db)
 
+    def get_connection(self):
+        conn = sqlite3.connect(self.current_db_path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
 
     def display_image(self, url, label_widget):
         from PIL import Image, ImageTk
@@ -255,7 +260,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             # 🔥 Check if metadata already exists
@@ -298,7 +303,17 @@ class FileListerApp:
             img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
             img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
 
-            # Download covers once
+            # ✅ Clear old covers if scraper returned fewer images
+
+            # Remove cover1 if no first image
+            if len(images) == 0 and os.path.exists(img1_path):
+                os.remove(img1_path)
+
+            # Remove cover2 if no second image
+            if len(images) < 2 and os.path.exists(img2_path):
+                os.remove(img2_path)
+
+            # Download covers (only if not already present)
             if len(images) > 0 and not os.path.exists(img1_path):
                 self.download_image(images[0], img1_path)
 
@@ -322,23 +337,13 @@ class FileListerApp:
             """, (category, file_id))
             conn.commit()
             conn.close()
-
-            # Update UI
-            self.category_var.set(category)
-
-            self.description_text.delete("1.0", tk.END)
-            self.description_text.insert("1.0", description)
-
-            self.display_image_from_file(img1_path, self.image_label1)
-            self.display_image_from_file(img2_path, self.image_label2)
-
+            self.refresh_ui_after_db_update(file_id)
             self.status_var.set("Metadata fetched and stored locally.")
-            self.load_db_records()
         except Exception as e:
             messagebox.showerror("Error", str(e))
 
     def load_metadata_from_db(self):
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
 
         cur.execute("""
@@ -390,26 +395,43 @@ class FileListerApp:
   
     def save_metadata(self):
         if not self.selected_file_id:
+            messagebox.showwarning("Select Record", "Select a record first.")
             return
 
         category = self.category_var.get().strip()
         description = self.description_text.get("1.0", tk.END).strip()
+        file_id = self.selected_file_id
 
-        conn = sqlite3.connect(self.current_db_path)
-        cur = conn.cursor()
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
 
-        cur.execute("""
-            INSERT INTO MovieDetails (file_id, category, description)
-            VALUES (?, ?, ?)
-            ON CONFLICT(file_id) DO UPDATE SET
-                category=excluded.category,
-                description=excluded.description
-        """, (self.selected_file_id, category, description))
+            # Upsert MovieDetails
+            cur.execute("""
+                INSERT INTO MovieDetails (file_id, category, description)
+                VALUES (?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    category=excluded.category,
+                    description=excluded.description
+            """, (file_id, category, description))
 
-        conn.commit()
-        conn.close()
+            # Sync Files table category
+            cur.execute("""
+                UPDATE Files
+                SET category=?
+                WHERE id=?
+            """, (category, file_id))
 
-        self.status_var.set("Metadata saved.")
+            conn.commit()
+            conn.close()
+
+            # Unified refresh
+            self.refresh_ui_after_db_update(file_id)
+            self.status_var.set("Metadata saved.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
 
 
     def update_filelist_statistics(self, files_info):
@@ -477,7 +499,7 @@ class FileListerApp:
             self.db_storage_tree.delete(i)
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("""
@@ -803,7 +825,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
         except Exception as e:
             messagebox.showerror("Database Error", str(e))
@@ -955,7 +977,7 @@ class FileListerApp:
                 return
 
             try:
-                conn = sqlite3.connect(self.current_db_path)
+                conn = self.get_connection()
                 cur = conn.cursor()
 
                 inserted = 0
@@ -1033,7 +1055,7 @@ class FileListerApp:
         storage_id = self.get_storage_id()
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             select_exact = """
@@ -1136,7 +1158,7 @@ class FileListerApp:
 
     def get_all_categories(self):
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT name FROM Categories ORDER BY name")
             rows = cur.fetchall()
@@ -1149,7 +1171,7 @@ class FileListerApp:
         if not name.strip():
             return False
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("INSERT OR IGNORE INTO Categories(name) VALUES (?)", (name.strip(),))
             conn.commit()
@@ -1383,7 +1405,7 @@ class FileListerApp:
 
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             groups = analyze_duplicates(conn)
             conn.close()
 
@@ -1485,7 +1507,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.executemany("DELETE FROM Files WHERE id = ?", [(i,) for i in ids])
@@ -1515,7 +1537,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
 
             stats_df = pd.read_sql_query("""
                 SELECT extension,
@@ -1568,7 +1590,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("""
@@ -1623,7 +1645,7 @@ class FileListerApp:
             size_mb = os.path.getsize(self.current_db_path) / (1024 * 1024)
             self.db_size_var.set(f"DB Size: {size_mb:.2f} MB")
 
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
            
             # Total records
@@ -1670,7 +1692,7 @@ class FileListerApp:
         if not self.current_db_path or not os.path.exists(self.current_db_path):
             return
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             
 
@@ -1907,7 +1929,7 @@ class FileListerApp:
         updated = 0
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             
 
@@ -1951,7 +1973,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("""
@@ -2161,7 +2183,7 @@ class FileListerApp:
             ids = [self.db_tree.item(i)["tags"][0] for i in sel]
 
             try:
-                conn = sqlite3.connect(self.current_db_path)
+                conn = self.get_connection()
                 cur = conn.cursor()
                 cur.executemany(
                     "UPDATE Files SET category=? WHERE id=?",
@@ -2197,7 +2219,7 @@ class FileListerApp:
         if not self.current_db_path:
             return
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             cur.execute("SELECT DISTINCT category FROM Files ORDER BY category")
             cats = [r[0] for r in cur.fetchall() if r[0]]
@@ -2214,7 +2236,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("""
@@ -2266,7 +2288,7 @@ class FileListerApp:
 
     def load_movie_metadata(self, file_id):
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("""
@@ -2303,8 +2325,6 @@ class FileListerApp:
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
-
-
 
 
 
@@ -2473,6 +2493,20 @@ class FileListerApp:
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
 
+    def refresh_ui_after_db_update(self, file_id):
+        self.load_db_records()
+
+        for item in self.db_tree.get_children():
+            tags = self.db_tree.item(item, "tags")
+            if tags and str(tags[0]) == str(file_id):
+                self.db_tree.selection_set(item)
+                self.db_tree.focus(item)
+                self.db_tree.see(item)
+                break
+
+        self.load_movie_metadata(file_id)
+
+
     def refresh_metadata(self):
         confirm = messagebox.askyesno(
             "Confirm Refresh",
@@ -2480,12 +2514,13 @@ class FileListerApp:
         )
         if not confirm:
             return
+
         if not self.selected_file_id:
             messagebox.showwarning("Select Record", "Select a record first.")
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             # Get stored metadata_url
@@ -2494,23 +2529,30 @@ class FileListerApp:
                 FROM MovieDetails
                 WHERE file_id=?
             """, (self.selected_file_id,))
-
             row = cur.fetchone()
+            if not row:
+                messagebox.showwarning("Missing Record", "Metadata record not found.")
+                conn.close()
+                return
 
-            if not row or not row[0]:
+            stored_url = row[0].strip() if row and row[0] else None
+            user_url = self.meta_url_var.get().strip()
+
+            # Priority: DB URL first, else user URL
+            url = stored_url if stored_url else user_url
+
+            if not url:
                 messagebox.showwarning(
-                    "No URL Found",
-                    "No stored metadata URL for this record."
+                    "URL Required",
+                    "No stored URL found.\nPlease enter a metadata URL first."
                 )
                 conn.close()
                 return
 
-            url = row[0]
-
             self.status_var.set("Refreshing metadata from internet...")
             self.root.update_idletasks()
 
-            # 🔥 Scrape again
+            # Scrape fresh data
             data = scrape_movie(url)
 
             category = data["category"]
@@ -2522,30 +2564,39 @@ class FileListerApp:
             img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
             img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
 
-            # 🔥 Overwrite covers
+            # Remove old covers if scraper returned fewer images
+            if len(images) == 0 and os.path.exists(img1_path):
+                os.remove(img1_path)
+
+            if len(images) < 2 and os.path.exists(img2_path):
+                os.remove(img2_path)
+
+            # Download new covers
             if len(images) > 0:
                 self.download_image(images[0], img1_path)
 
             if len(images) > 1:
                 self.download_image(images[1], img2_path)
 
-            # 🔥 Update MovieDetails
+            # Update MovieDetails
             cur.execute("""
                 UPDATE MovieDetails
                 SET category=?,
                     description=?,
                     cover1_path=?,
-                    cover2_path=?
+                    cover2_path=?,
+                    metadata_url=?
                 WHERE file_id=?
             """, (
                 category,
                 description,
                 img1_path,
                 img2_path,
+                url,
                 file_id
             ))
 
-            # 🔥 Update Files table category (if you're syncing)
+            # Sync Files table category
             cur.execute("""
                 UPDATE Files
                 SET category=?
@@ -2555,15 +2606,8 @@ class FileListerApp:
             conn.commit()
             conn.close()
 
-            # Update UI
-            self.category_var.set(category)
-            self.description_text.delete("1.0", tk.END)
-            self.description_text.insert("1.0", description)
-
-            self.display_image_from_file(img1_path, self.image_label1)
-            self.display_image_from_file(img2_path, self.image_label2)
-
-            self.load_db_records()
+            # -------- UI Refresh Sequence --------
+            self.refresh_ui_after_db_update(file_id)
 
             self.status_var.set("Metadata refreshed successfully.")
 
@@ -2656,7 +2700,7 @@ class FileListerApp:
                 dirs[:] = []
 
         # ---- Load DB rows for selected storage id ----
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
 
         cur.execute("""
@@ -2704,7 +2748,7 @@ class FileListerApp:
 
 
         # ---- Load ALL DB rows for cross-storage detection ----
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
         cur.execute("""
             SELECT file_name, size_bytes, storage_id
@@ -2849,7 +2893,7 @@ class FileListerApp:
                 try:
                     new_val = int(new_val) if new_val else None
 
-                    conn = sqlite3.connect(self.current_db_path)
+                    conn = self.get_connection()
                     cur = conn.cursor()
                     cur.execute("UPDATE Files SET year=? WHERE id=?", (new_val, record_id))
                     conn.commit()
@@ -2886,7 +2930,7 @@ class FileListerApp:
                 self.add_new_category(new_val)
 
                 try:
-                    conn = sqlite3.connect(self.current_db_path)
+                    conn = self.get_connection()
                     cur = conn.cursor()
                     cur.execute("UPDATE Files SET category=? WHERE id=?", (new_val, record_id))
                     conn.commit()
@@ -2912,7 +2956,7 @@ class FileListerApp:
             messagebox.showwarning("Select", "Select at least one record.")
             return
 
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
         fixed = 0
 
@@ -2950,7 +2994,7 @@ class FileListerApp:
         if not folder:
             return
 
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
 
         fixed = 0
@@ -2998,7 +3042,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             cur.execute("UPDATE Files SET full_path=? WHERE id=?", (new, rid))
@@ -3019,7 +3063,7 @@ class FileListerApp:
         if not messagebox.askyesno("Confirm", "Delete selected DB records?"):
             return
 
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
 
         for item in sel:
@@ -3036,7 +3080,7 @@ class FileListerApp:
     def select_storage_id_dialog(self):
         """Show dropdown of unique storage_ids from DB and return selected one"""
 
-        conn = sqlite3.connect(self.current_db_path)
+        conn = self.get_connection()
         cur = conn.cursor()
         cur.execute("SELECT DISTINCT storage_id FROM Files ORDER BY storage_id")
         ids = [row[0] for row in cur.fetchall()]
@@ -3075,7 +3119,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             selected_sid = self.selected_storage_filter.get()
@@ -3321,7 +3365,7 @@ class FileListerApp:
             return
 
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
 
             for item in sel:
@@ -3351,7 +3395,7 @@ class FileListerApp:
         if not messagebox.askyesno("Confirm", "Delete ALL rows from DB?"):
             return
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             cur = conn.cursor()
             
             cur.execute("DELETE FROM Files")
@@ -3373,7 +3417,7 @@ class FileListerApp:
         if not path:
             return
         try:
-            conn = sqlite3.connect(self.current_db_path)
+            conn = self.get_connection()
             df = pd.read_sql_query("SELECT id, file_name, extension, size_bytes, storage_id, creation_date, full_path FROM Files", conn)
             conn.close()
             df.to_excel(path, index=False)

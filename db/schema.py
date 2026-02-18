@@ -34,15 +34,17 @@ MOVIE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS MovieDetails (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     file_id INTEGER UNIQUE,
-    movie_name TEXT,
-    year TEXT,
+
     category TEXT,
     description TEXT,
-    image1_url TEXT,
-    image2_url TEXT,
-    FOREIGN KEY (file_id) REFERENCES Files(id)
+    cover1_path TEXT,
+    cover2_path TEXT,
+    metadata_url TEXT,
+
+    FOREIGN KEY (file_id) REFERENCES Files(id) ON DELETE CASCADE
 );
 """
+
 FILES_TABLE_INDEX = """
 CREATE UNIQUE INDEX IF NOT EXISTS idx_unique_file_global
 ON Files (file_name, size_bytes);
