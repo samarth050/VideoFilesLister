@@ -2493,6 +2493,7 @@ class FileListerApp:
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
 
+    """
     def refresh_ui_after_db_update(self, file_id):
         self.load_db_records()
 
@@ -2504,6 +2505,39 @@ class FileListerApp:
                 self.db_tree.see(item)
                 break
 
+        self.load_movie_metadata(file_id)
+    """
+
+    def refresh_ui_after_db_update(self, file_id):
+        # Reload all records
+        self.load_db_records()
+
+        # Find index in full dataset
+        target_index = None
+        for idx, row in enumerate(self.db_records_cache):
+            if str(row[0]) == str(file_id):
+                target_index = idx
+                break
+
+        if target_index is None:
+            return  # record not found
+
+        # Calculate correct page
+        page = target_index // self.page_size
+
+        # Jump to that page
+        self.show_db_page(page)
+
+        # Select inside page
+        for item in self.db_tree.get_children():
+            tags = self.db_tree.item(item, "tags")
+            if tags and str(tags[0]) == str(file_id):
+                self.db_tree.selection_set(item)
+                self.db_tree.focus(item)
+                self.db_tree.see(item)
+                break
+
+        # Reload metadata panel
         self.load_movie_metadata(file_id)
 
 
