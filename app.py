@@ -341,11 +341,7 @@ class FileListerApp:
                 url
             ))
             # 🔥 IMPORTANT ADD THIS
-            cur.execute("""
-                UPDATE Files
-                SET category=?
-                WHERE id=?
-            """, (category, file_id))
+            cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
             conn.commit()
             conn.close()
             self.refresh_ui_after_db_update(file_id)
@@ -423,11 +419,7 @@ class FileListerApp:
             """, (file_id, category, description))
 
             # Sync Files table category
-            cur.execute("""
-                UPDATE Files
-                SET category=?
-                WHERE id=?
-            """, (category, file_id))
+            cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
 
             conn.commit()
             conn.close()
@@ -987,11 +979,7 @@ class FileListerApp:
                     f, reason, db_id = row_file_map[iid]
 
                     if reason == "Movie moved (update path/storage)":
-                        cur.execute("""
-                            UPDATE Files
-                            SET storage_id=?, full_path=?, creation_date=?
-                            WHERE id=?
-                        """, (
+                        cur.execute(UPDATE_FILE_MOVE, (
                             self.get_storage_id(),
                             f["full_path"],
                             format_date(f["creation_date"]),
@@ -1000,12 +988,7 @@ class FileListerApp:
                         updated += 1
 
                     elif reason in ("Not present in database", "Name match, size mismatch"):
-                        cur.execute("""
-                            INSERT INTO Files
-                            (file_name, extension, size_bytes, storage_id,
-                            creation_date, full_path, year, category)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, (
+                        cur.execute(INSERT_FILE_RECORD, (
                             f["name_without_ext"],
                             f["extension"],
                             f["size"],
@@ -1068,19 +1051,6 @@ class FileListerApp:
                 SELECT 1 FROM Files WHERE file_name=?
             """
 
-            insert_q = """
-                INSERT INTO Files
-                (file_name, extension, size_bytes, storage_id,
-                creation_date, full_path, year, category)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """
-
-            update_q = """
-                UPDATE Files
-                SET storage_id=?, full_path=?, creation_date=?
-                WHERE id=?
-            """
-
             inserted = 0
             updated = 0
             blocked = 0
@@ -1107,7 +1077,7 @@ class FileListerApp:
                     if db_sid == storage_id:
                         if os.path.normcase(db_path) != os.path.normcase(full_path):
                             # 🔄 moved movie
-                            cur.execute(update_q, (
+                            cur.execute(UPDATE_FILE_MOVE, (
                                 storage_id,
                                 full_path,
                                 creation_date,
@@ -1125,7 +1095,7 @@ class FileListerApp:
                     # no exact match → check name collision
                     cur.execute(select_name, (file_name,))
                     # even if name exists with different size → allowed
-                    cur.execute(insert_q, (
+                    cur.execute(INSERT_FILE_RECORD, (
                         file_name,
                         f["extension"],
                         size,
@@ -1510,7 +1480,7 @@ class FileListerApp:
             conn = self.get_connection()
             cur = conn.cursor()
 
-            cur.executemany("DELETE FROM Files WHERE id = ?", [(i,) for i in ids])
+            cur.executemany(DELETE_FILE_BY_ID, [(i,) for i in ids])
 
             conn.commit()
             conn.close()
@@ -3068,7 +3038,7 @@ class FileListerApp:
 
         for item in sel:
             rid = tree.item(item, "values")[0]
-            cur.execute("DELETE FROM Files WHERE id=?", (rid,))
+            cur.execute(DELETE_FILE_BY_ID, (rid,))
             tree.delete(item)
 
         conn.commit()
@@ -3371,7 +3341,7 @@ class FileListerApp:
             for item in sel:
                 try:
                     record_id = self.db_tree.item(item, "tags")[0]   # ✅ REAL DB ID
-                    cur.execute("DELETE FROM Files WHERE id=?", (record_id,))
+                    cur.execute(DELETE_FILE_BY_ID", (record_id,))
                 except Exception:
                     continue
 
@@ -3418,7 +3388,7 @@ class FileListerApp:
             return
         try:
             conn = self.get_connection()
-            df = pd.read_sql_query("SELECT id, file_name, extension, size_bytes, storage_id, creation_date, full_path FROM Files", conn)
+            df = pd.read_sql_query(DB_SELECT_ALL, conn)
             conn.close()
             df.to_excel(path, index=False)
             messagebox.showinfo("Success", f"Exported to {path}")
