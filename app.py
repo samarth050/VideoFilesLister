@@ -22,7 +22,6 @@ import os
 import json
 import sqlite3
 import re
-import ctypes
 import subprocess
 import sys
 import datetime
@@ -37,7 +36,6 @@ import tkinter as tk
 from tkinter import filedialog, messagebox, ttk, font as tkfont
 
 from PIL import Image, ImageTk
-from io import BytesIO
 import requests
 
 
@@ -85,8 +83,6 @@ from db.database import init_db, ensure_global_unique_index
 from scanner.scanner import (
     get_files_info,
     detect_storage_id_from_path,
-    get_windows_drive_label,
-    get_drive_label
 )
 
 from duplicates.duplicate_analyzer import analyze_duplicates
