@@ -3341,7 +3341,7 @@ class FileListerApp:
             for item in sel:
                 try:
                     record_id = self.db_tree.item(item, "tags")[0]   # ✅ REAL DB ID
-                    cur.execute(DELETE_FILE_BY_ID", (record_id,))
+                    cur.execute(DELETE_FILE_BY_ID, (record_id,))
                 except Exception:
                     continue
 
