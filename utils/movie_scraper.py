@@ -18,6 +18,17 @@ from urllib.parse import urlparse
 # Controlled Category Vocabulary
 # ------------------------------
 KNOWN_CATEGORIES = [
+    "Classic Porn, Incest",
+    "Drama, Incest",
+    "Incest, Thriller",
+    "Mystery",
+    "Crime",
+    "Asian",
+    "Incest",
+    "Newage Porn",
+    "Newage Erotica",
+    "Classic Erotica",
+    "Asian Erotica",
     "Classic Porn",
     "Incest",
     "Thriller",
@@ -102,14 +113,43 @@ def _extract_name_year_from_url(url):
 def _extract_category(full_text):
     raw_block = _extract_raw_category_block(full_text)
 
+    if not raw_block:
+        return ""
+
+    raw_block = raw_block.strip()
+
     matched = []
 
+    # 1️⃣ Match controlled categories
     for cat in KNOWN_CATEGORIES:
         pattern = r"\b" + re.escape(cat) + r"\b"
         if re.search(pattern, raw_block, re.IGNORECASE):
             matched.append(cat)
 
-    return ", ".join(matched)
+    # 2️⃣ Remove duplicates while preserving order
+    seen = set()
+    unique_matched = []
+    for cat in matched:
+        if cat not in seen:
+            unique_matched.append(cat)
+            seen.add(cat)
+
+    # 3️⃣ If controlled matches found → return them
+    if unique_matched:
+        return ", ".join(sorted(unique_matched))
+
+    # 4️⃣ Otherwise fallback to raw block (cleaned)
+    # Split raw block by commas and deduplicate
+    raw_parts = [p.strip() for p in raw_block.split(",") if p.strip()]
+
+    seen_raw = set()
+    unique_raw = []
+    for part in raw_parts:
+        if part.lower() not in seen_raw:
+            unique_raw.append(part)
+            seen_raw.add(part.lower())
+
+    return ", ".join(sorted(unique_raw))
 
 
 def _extract_raw_category_block(full_text):

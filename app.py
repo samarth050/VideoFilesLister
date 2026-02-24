@@ -18,6 +18,7 @@ Features:
 # ===============================
 # Standard Library
 # ===============================
+import shutil
 import os
 import json
 import sqlite3
@@ -62,6 +63,7 @@ from db.schema import (
     DB_SELECT_ALL,
     DB_SELECT_STORAGE_ID,
     MOVIE_DETAILS_INSERT,
+    MOVIE_DETAILS_INSERT_MANUAL,
     SELECT_MOVIE_METADATA_FULL,
     SELECT_MOVIE_METADATA,
     UPDATE_FILES_CATEGORY,
@@ -207,7 +209,11 @@ class FileListerApp:
         self.dup_all_rows = []
         self.dup_current_page = 0
         self.dup_total_pages = 0
-
+        # --- Covers local path
+        self.category_var = tk.StringVar()
+        self.db_category_var = tk.StringVar()
+        self.cover1_local_path = tk.StringVar()
+        self.cover2_local_path = tk.StringVar()
 
         self.setup_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
@@ -295,15 +301,26 @@ class FileListerApp:
                 self.status_var.set("Metadata loaded from local database.")
                 conn.close()
                 return
-
+            # 🔥 Disable manual category editing during fetch
+            self.category_combo.configure(state="disabled")
             # ----------------------------
             # SCRAPE (ONLY IF NOT STORED)
             # ----------------------------
             data = scrape_movie(url)
 
             category = data["category"]
+            # 🔥 Force metadata panel to reflect scraped category
+            self.category_var.set(category)
+
+            # 🔥 Immediately sync combobox display
+            self.category_combo.set(category)
             description = data["description"]
             images = data["images"]
+            # 🔥 Update UI immediately
+            self.category_var.set(category)
+
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", description)            
 
             file_id = self.selected_file_id
 
@@ -341,6 +358,8 @@ class FileListerApp:
             conn.commit()
             conn.close()
             self.refresh_ui_after_db_update(file_id)
+            # 🔥 Re-enable manual category editing
+            self.category_combo.configure(state="normal")
             self.status_var.set("Metadata fetched and stored locally.")
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -391,7 +410,6 @@ class FileListerApp:
         except Exception as e:
             print("Image load failed:", e)
 
-  
     def save_metadata(self):
         if not self.selected_file_id:
             messagebox.showwarning("Select Record", "Select a record first.")
@@ -401,33 +419,63 @@ class FileListerApp:
         description = self.description_text.get("1.0", tk.END).strip()
         file_id = self.selected_file_id
 
+        # 🔹 Manual cover paths (new)
+        cover1_source = self.cover1_local_path.get().strip()
+        cover2_source = self.cover2_local_path.get().strip()
+
+        # Optional validation
+        if not category:
+            messagebox.showwarning("Category Required", "Select category.")
+            return
+
+        if not description:
+            messagebox.showwarning("Description Required", "Enter description.")
+            return
+
         try:
             conn = self.get_connection()
             cur = conn.cursor()
 
-            # Upsert MovieDetails
-            cur.execute("""
-                INSERT INTO MovieDetails (file_id, category, description)
-                VALUES (?, ?, ?)
-                ON CONFLICT(file_id) DO UPDATE SET
-                    category=excluded.category,
-                    description=excluded.description
-            """, (file_id, category, description))
+            # --------------------------------------
+            # 📁 Handle Manual Image Copy (NEW)
+            # --------------------------------------
+            covers_folder = os.path.join(os.path.dirname(self.current_db_path), "covers")
+            os.makedirs(covers_folder, exist_ok=True)
 
-            # Sync Files table category
+            cover1_dest = None
+            cover2_dest = None
+
+            if cover1_source and os.path.exists(cover1_source):
+                ext1 = os.path.splitext(cover1_source)[1]
+                cover1_dest = os.path.join(covers_folder, f"{file_id}_cover1{ext1}")
+                shutil.copy2(cover1_source, cover1_dest)
+
+            if cover2_source and os.path.exists(cover2_source):
+                ext2 = os.path.splitext(cover2_source)[1]
+                cover2_dest = os.path.join(covers_folder, f"{file_id}_cover2{ext2}")
+                shutil.copy2(cover2_source, cover2_dest)
+
+            # --------------------------------------
+            # 🗄 Upsert MovieDetails (UPDATED)
+            # --------------------------------------
+            cur.execute(MOVIE_DETAILS_INSERT_MANUAL, (file_id, category, description, cover1_dest, cover2_dest))
+
+            # Sync Files table category (existing)
             cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
 
             conn.commit()
             conn.close()
+
+            # Clear manual image fields after save
+            self.cover1_local_path.set("")
+            self.cover2_local_path.set("")
 
             # Unified refresh
             self.refresh_ui_after_db_update(file_id)
             self.status_var.set("Metadata saved.")
 
         except Exception as e:
-            messagebox.showerror("Error", str(e))
-
-
+            messagebox.showerror("Error", str(e)) 
 
     def update_filelist_statistics(self, files_info):
         """
@@ -2150,6 +2198,7 @@ class FileListerApp:
     def load_category_dropdown(self):
         if not self.current_db_path:
             return
+
         try:
             conn = self.get_connection()
             cur = conn.cursor()
@@ -2159,9 +2208,21 @@ class FileListerApp:
         except:
             cats = []
 
+        # Remove duplicates and sort
+        cats = sorted(set(cats))
+
         values = ["All"] + cats + ["Uncategorized"]
+
+        current = self.db_category_var.get()
+
+        # Update dropdown values
         self.db_category_combo["values"] = values
-        self.db_category_var.set("All")
+
+        # Restore previous selection if possible
+        if current in values:
+            self.db_category_var.set(current)
+        else:
+            self.db_category_var.set("All")
 
     def load_storage_ids_from_db(self):
         if not self.current_db_path or not os.path.exists(self.current_db_path):
@@ -2311,8 +2372,7 @@ class FileListerApp:
         tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db).pack(side="left", padx=4)
         tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)\
             .pack(side="left", padx=6)
-        tk.Button(top, text="Set Category", command=self.open_bulk_category_editor).pack(side="left", padx=6)
-
+        
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
         tk.Entry(top, textvariable=self.db_search_var, width=40).pack(side="left", padx=4)
@@ -2396,14 +2456,40 @@ class FileListerApp:
                 command=self.refresh_metadata).pack(side="left", padx=5)
 
         # Category field
-        ttk.Label(details_frame, text="Category:").pack(anchor="w")
-        self.category_var = tk.StringVar()
-        ttk.Entry(details_frame, textvariable=self.category_var).pack(fill="x", pady=3)
+        category_frame = ttk.Frame(details_frame)
+        category_frame.pack(fill="x", pady=5)
+
+        ttk.Label(category_frame, text="Category:").pack(side="left")
+
+        self.category_combo = ttk.Combobox(
+            category_frame,
+            textvariable=self.category_var,
+            values=self.get_all_categories(),
+            state="normal",
+            width=25
+        )
+        self.category_combo.pack(side="left", padx=5)
+
+        ttk.Button(
+            category_frame,
+            text="Bulk Edit",
+            command=self.open_bulk_category_editor
+        ).pack(side="right")
 
         # Description field
         ttk.Label(details_frame, text="Description:").pack(anchor="w")
         self.description_text = tk.Text(details_frame, height=6)
         self.description_text.pack(fill="both", pady=3)
+
+        ttk.Label(details_frame, text="Cover 1:").pack(anchor="w", pady=(5, 0))
+
+        ttk.Entry(details_frame, textvariable=self.cover1_local_path, width=50).pack(fill="x", padx=5)
+
+        ttk.Button(details_frame, text="Browse", command=self.browse_cover1).pack(anchor="e", padx=5, pady=(0, 5))
+
+        ttk.Label(details_frame, text="Cover 2:").pack(anchor="w", pady=(5, 0))
+        ttk.Entry(details_frame, textvariable=self.cover2_local_path, width=50).pack(fill="x", padx=5)
+        ttk.Button(details_frame, text="Browse", command=self.browse_cover2).pack(anchor="e", padx=5, pady=(0, 5))
 
         ttk.Button(details_frame, text="Save Metadata",
                 command=self.save_metadata).pack(pady=5)
@@ -2439,6 +2525,19 @@ class FileListerApp:
 
         self.load_movie_metadata(file_id)
     """
+    def browse_cover1(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp")]
+        )
+        if path:
+            self.cover1_local_path.set(path)
+
+    def browse_cover2(self):
+        path = filedialog.askopenfilename(
+            filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp")]
+        )
+        if path:
+            self.cover2_local_path.set(path)
 
     def refresh_ui_after_db_update(self, file_id):
         # Reload all records
@@ -2517,13 +2616,23 @@ class FileListerApp:
 
             self.status_var.set("Refreshing metadata from internet...")
             self.root.update_idletasks()
-
+            # 🔥 Disable manual category editing during fetch
+            self.category_combo.configure(state="disabled")
             # Scrape fresh data
             data = scrape_movie(url)
 
             category = data["category"]
+            # 🔥 Force metadata panel to reflect scraped category
+            self.category_var.set(category)
+
+            # 🔥 Immediately sync combobox display
+            self.category_combo.set(category)
             description = data["description"]
             images = data["images"]
+            # 🔥 Immediate UI update
+            self.category_var.set(category)
+            self.description_text.delete("1.0", tk.END)
+            self.description_text.insert("1.0", description)
 
             file_id = self.selected_file_id
 
@@ -2574,7 +2683,8 @@ class FileListerApp:
 
             # -------- UI Refresh Sequence --------
             self.refresh_ui_after_db_update(file_id)
-
+            # 🔥 Re-enable manual category editing
+            self.category_combo.configure(state="normal")
             self.status_var.set("Metadata refreshed successfully.")
 
         except Exception as e:
