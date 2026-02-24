@@ -30,6 +30,7 @@ KNOWN_CATEGORIES = [
     "Classic Erotica",
     "Asian Erotica",
     "Classic Porn",
+    "Classic Porn, Sex Education",
     "Incest",
     "Thriller",
     "Drama",
