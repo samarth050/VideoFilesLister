@@ -600,6 +600,104 @@ class FileListerApp:
         except Exception as e:
             print("Failed to save settings:", e)
 
+    def load_movie_detail_view(self, file_id):
+        conn = self.get_connection()
+        cur = conn.cursor()
+
+        # Join Files + MovieDetails
+        cur.execute("""
+            SELECT f.file_name,
+                f.extension,
+                f.year,
+                f.storage_id,
+                f.full_path,
+                m.category,
+                m.description,
+                m.cover1_path,
+                m.cover2_path
+            FROM Files f
+            LEFT JOIN MovieDetails m ON f.id = m.file_id
+            WHERE f.id = ?
+        """, (file_id,))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if not row:
+            return
+
+        name, ext, year, storage, path, category, desc, cover1, cover2 = row
+
+        self.detail_title.config(text=name)
+        self.detail_category.config(text=f"Category: {category or 'N/A'}")
+        self.detail_year.config(text=f"Year: {year or 'N/A'}")
+        self.detail_format.config(text=f"Format: {ext}")
+        self.detail_storage.config(text=f"Storage: {storage}")
+
+        # Enable temporarily
+        self.detail_description.configure(state="normal")
+
+        self.detail_description.delete("1.0", tk.END)
+        self.detail_description.insert("1.0", desc or "")
+
+        # Disable again
+        self.detail_description.configure(state="disabled")
+
+        # Load images
+        if cover1 and os.path.exists(cover1):
+            self.display_image_from_file(cover1, self.detail_image1)
+
+        if cover2 and os.path.exists(cover2):
+            self.display_image_from_file(cover2, self.detail_image2)
+
+    def setup_movie_details_tab(self, parent):
+        parent.columnconfigure(1, weight=1)
+
+        # Title
+        self.detail_title = tk.Label(
+            parent,
+            text="Select a movie...",
+            font=("Segoe UI", 18, "bold")
+        )
+        self.detail_title.pack(pady=10)
+
+        # Top Info Frame
+        info_frame = tk.Frame(parent)
+        info_frame.pack(fill="x", padx=20, pady=10)
+
+        self.detail_category = tk.Label(info_frame, text="",font=("Segoe UI", 11, "bold"))
+        self.detail_year = tk.Label(info_frame, text="",font=("Segoe UI", 11, "bold"))
+        self.detail_format = tk.Label(info_frame, text="",font=("Segoe UI", 11, "bold"))
+        self.detail_storage = tk.Label(info_frame, text="",font=("Segoe UI", 11, "bold"))
+
+        self.detail_category.pack(anchor="w")
+        self.detail_year.pack(anchor="w")
+        self.detail_format.pack(anchor="w")
+        self.detail_storage.pack(anchor="w")
+
+        # Images
+        image_frame = tk.Frame(parent)
+        image_frame.pack(pady=10)
+
+        self.detail_image1 = tk.Label(image_frame)
+        self.detail_image1.pack(side="left", padx=20)
+
+        self.detail_image2 = tk.Label(image_frame)
+        self.detail_image2.pack(side="left", padx=20)
+
+        # Description
+        tk.Label(parent, text="Description:", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20)
+        self.detail_description = tk.Text(
+            parent,
+            font=("Segoe UI", 14),
+            height=8,
+            wrap="word",
+            state="disabled",
+            bg="#f4f4f4",
+            relief="flat"
+        )
+        #self.detail_description = tk.Text(parent,font=("Segoe UI", 14), height=8, wrap="word",state="disabled")
+        self.detail_description.pack(fill="both", expand=True, padx=20, pady=10)
 
     def setup_ui(self):
         self.notebook = ttk.Notebook(self.root)
@@ -608,16 +706,18 @@ class FileListerApp:
         main_tab = ttk.Frame(self.notebook)
         stats_tab = ttk.Frame(self.notebook)
         db_tab = ttk.Frame(self.notebook)
+        details_tab = ttk.Frame(self.notebook)
         dup_tab = ttk.Frame(self.notebook)
         self.notebook.add(main_tab, text="Files List")
         self.notebook.add(stats_tab, text="Statistics")
         self.notebook.add(db_tab, text="SQLite Viewer")
-        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+        self.notebook.add(details_tab, text="Movie Details")
         self.notebook.add(dup_tab, text="Duplicates")
-
+        self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
         self.setup_main_tab(main_tab)
         self.setup_stats_tab(stats_tab)
-        self.setup_db_viewer_tab(db_tab)    
+        self.setup_db_viewer_tab(db_tab)
+        self.setup_movie_details_tab(details_tab)    
         self.setup_duplicates_tab(dup_tab)
 
 
@@ -2334,6 +2434,7 @@ class FileListerApp:
 
         if tags:
             self.selected_file_id = int(tags[0])
+            self.load_movie_detail_view(self.selected_file_id)
             self.load_movie_metadata(self.selected_file_id)
         else:
             self.selected_file_id = None
