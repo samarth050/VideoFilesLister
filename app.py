@@ -150,6 +150,8 @@ class ExportDialog:
         self.result = None
         self.top.destroy()
 
+def normalize_name(text):
+    return re.sub(r'[^a-z0-9]', '', text.lower())
 
 class FileListerApp:
     CONFIG_FILE = "app_settings.json"
@@ -264,6 +266,146 @@ class FileListerApp:
 
         except Exception as e:
             print("Image load error:", e)
+
+    def find_movie_by_url(self, url):
+        data = scrape_movie(url)
+
+        name = data.get("name")
+        year = data.get("year")
+        ext = data.get("extension")
+        size_mb = data.get("size_mb")
+
+        if not name:
+            return None, None
+
+        target_clean = re.sub(r'(19|20)\d{2}', '', name)
+        target_norm = normalize_name(target_clean)
+
+        conn = self.get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT id, file_name, extension, year, size_bytes
+            FROM Files
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        candidates = []
+
+        for file_id, file_name, db_ext, db_year, size_bytes in rows:
+
+            # Extract year from filename if DB year empty
+            extracted_year = None
+            match = re.search(r'(19|20)\d{2}', file_name)
+            if match:
+                extracted_year = match.group(0)
+
+            effective_year = db_year if db_year else extracted_year
+
+            # Normalize DB filename
+            db_clean = re.sub(r'(19|20)\d{2}', '', file_name)
+            db_norm = normalize_name(db_clean)
+
+            # Name must match
+            if db_norm != target_norm:
+                continue
+
+            # Year must match (if URL has year)
+            if year:
+                if not effective_year or str(year) != str(effective_year):
+                    continue
+
+            score = 0
+
+            # Extension match bonus
+            if ext and db_ext and db_ext.lower() == ext.lower():
+                score += 3
+
+            # Size match bonus
+            if size_mb and size_bytes:
+                db_size_mb = size_bytes / (1024 * 1024)
+                if abs(db_size_mb - size_mb) <= 15:
+                    score += 3
+
+            # Prefer larger file
+            if size_bytes:
+                score += size_bytes / (1024 * 1024 * 1000)
+
+            # Prefer MKV slightly
+            if db_ext and db_ext.lower() == "mkv":
+                score += 0.5
+
+            candidates.append((score, file_id))
+
+        if not candidates:
+            return None, data
+
+        # Choose highest score
+        candidates.sort(reverse=True)
+        best_match = candidates[0][1]
+
+        return best_match, data
+
+    def auto_update_by_url(self):
+        url = self.meta_url_var.get().strip()
+
+        if not url:
+            messagebox.showwarning("URL Required", "Paste metadata URL.")
+            return
+
+        try:
+            file_id, data = self.find_movie_by_url(url)
+
+            if not file_id:
+                messagebox.showwarning("Not Found", "No matching record found in database.")
+                return
+
+            # Set selected ID
+            self.selected_file_id = file_id
+
+            # Apply metadata using existing logic
+            category = data["category"]
+            description = data["description"]
+            images = data["images"]
+
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            # Paths
+            img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
+            img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
+
+            # Download images
+            if len(images) > 0:
+                self.download_image(images[0], img1_path)
+
+            if len(images) > 1:
+                self.download_image(images[1], img2_path)
+
+            # Update MovieDetails
+            cur.execute(MOVIE_DETAILS_INSERT, (
+                file_id,
+                category,
+                description,
+                img1_path,
+                img2_path,
+                url
+            ))
+
+            # Sync Files category
+            cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
+
+            conn.commit()
+            conn.close()
+
+            # Refresh UI
+            self.refresh_ui_after_db_update(file_id)
+
+            self.status_var.set("Metadata updated automatically from URL.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
     def fetch_metadata(self):
         if not self.selected_file_id:
@@ -2555,7 +2697,11 @@ class FileListerApp:
 
         ttk.Button(btn_frame, text="🔄 Refresh Metadata",
                 command=self.refresh_metadata).pack(side="left", padx=5)
-
+        ttk.Button(
+            btn_frame,
+            text="⚡ Auto Update by URL",
+            command=self.auto_update_by_url
+        ).pack(side="left", padx=5)
         # Category field
         category_frame = ttk.Frame(details_frame)
         category_frame.pack(fill="x", pady=5)
