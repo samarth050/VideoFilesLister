@@ -553,6 +553,79 @@ class FileListerApp:
         except Exception as e:
             print("Image load failed:", e)
 
+    def is_low_resolution(image_path, min_height=600):
+        try:
+            from PIL import Image
+            with Image.open(image_path) as img:
+                width, height = img.size
+                return height < min_height
+        except:
+            return True
+
+    def upgrade_existing_covers(self):
+        if not self.current_db_path:
+            return
+
+        if not messagebox.askyesno(
+            "Upgrade Covers",
+            "This will scan all movies and upgrade low-resolution covers.\nContinue?"
+        ):
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT file_id, metadata_url, cover1_path, cover2_path
+                FROM MovieDetails
+            """)
+            rows = cur.fetchall()
+
+            upgraded = 0
+
+            for file_id, url, cover1, cover2 in rows:
+
+                if not url:
+                    continue
+
+                need_upgrade = False
+
+                if cover1 and os.path.exists(cover1):
+                    if self.is_low_resolution(cover1):
+                        need_upgrade = True
+
+                if cover2 and os.path.exists(cover2):
+                    if self.is_low_resolution(cover2):
+                        need_upgrade = True
+
+                if not need_upgrade:
+                    continue
+
+                data = scrape_movie(url)
+                images = data.get("images", [])
+
+                img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
+                img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
+
+                if len(images) > 0:
+                    self.download_image(images[0], img1_path)
+
+                if len(images) > 1:
+                    self.download_image(images[1], img2_path)
+
+                upgraded += 1
+
+            conn.close()
+
+            messagebox.showinfo(
+                "Completed",
+                f"{upgraded} movie covers upgraded to full resolution."
+            )
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
     def save_metadata(self):
         if not self.selected_file_id:
             messagebox.showwarning("Select Record", "Select a record first.")
@@ -757,7 +830,8 @@ class FileListerApp:
             return
 
         name, ext, year, storage, path, size_bytes, category, desc, cover1, cover2 = row
-
+        self.detail_cover1_path = cover1
+        self.detail_cover2_path = cover2
         self.detail_title.config(text=name)
         self.detail_category.config(text=f"Category: {category or 'N/A'}")
         self.detail_year.config(text=f"Year: {year or 'N/A'}")
@@ -785,6 +859,39 @@ class FileListerApp:
 
         if cover2 and os.path.exists(cover2):
             self.display_image_from_file(cover2, self.detail_image2)
+
+    def open_full_image(self, image_path):
+        if not image_path or not os.path.exists(image_path):
+            return
+
+        try:
+            win = tk.Toplevel(self.root)
+            win.title("Full Size Image")
+            win.geometry("900x700")
+            win.transient(self.root)
+
+            # Scrollable Canvas
+            canvas = tk.Canvas(win, bg="black")
+            canvas.pack(fill="both", expand=True)
+
+            h_scroll = tk.Scrollbar(win, orient="horizontal", command=canvas.xview)
+            h_scroll.pack(side="bottom", fill="x")
+
+            v_scroll = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+            v_scroll.pack(side="right", fill="y")
+
+            canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
+
+            img = Image.open(image_path)
+            photo = ImageTk.PhotoImage(img)
+
+            canvas.create_image(0, 0, anchor="nw", image=photo)
+            canvas.image = photo
+
+            canvas.config(scrollregion=canvas.bbox("all"))
+
+        except Exception as e:
+            messagebox.showerror("Image Error", str(e))
 
     def setup_movie_details_tab(self, parent):
         parent.columnconfigure(1, weight=1)
@@ -831,7 +938,10 @@ class FileListerApp:
 
         self.detail_image2 = tk.Label(image_frame)
         self.detail_image2.pack(side="left", padx=20)
-
+        self.detail_image1.bind("<Button-1>", lambda e: self.open_full_image(self.detail_cover1_path))
+        self.detail_image2.bind("<Button-1>", lambda e: self.open_full_image(self.detail_cover2_path))
+        self.detail_image1.config(cursor="hand2")
+        self.detail_image2.config(cursor="hand2")        
         # Description
         tk.Label(parent, text="Description:", font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=20)
         self.detail_description = tk.Text(
@@ -2620,7 +2730,8 @@ class FileListerApp:
         tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db).pack(side="left", padx=4)
         tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)\
             .pack(side="left", padx=6)
-        
+        tk.Button(top, text="Upgrade Covers",
+          command=self.upgrade_existing_covers).pack(side="left", padx=6)        
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
         tk.Entry(top, textvariable=self.db_search_var, width=40).pack(side="left", padx=4)

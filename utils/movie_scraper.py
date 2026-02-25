@@ -197,17 +197,38 @@ def _extract_description(full_text):
 def _extract_images(soup):
     images = []
 
-    article = soup.find("article")
+    def clean_url(url):
+        # Remove WordPress thumbnail size suffix (e.g. -300x450.jpg)
+        return re.sub(r'-\d+x\d+(?=\.(jpg|jpeg|png))', '', url)
 
-    if article:
-        img_tags = article.find_all("img")
-    else:
-        img_tags = soup.find_all("img")
+    for img in soup.find_all("img"):
+        parent = img.parent
+        url = None
 
-    for img in img_tags:
-        src = img.get("src") or img.get("data-src")
+        # 1️⃣ Prefer full image from parent <a href="">
+        if parent and parent.name == "a" and parent.get("href"):
+            href = parent["href"]
+            if href.lower().endswith((".jpg", ".jpeg", ".png")):
+                url = href
 
-        if src and src.startswith("http"):
-            images.append(src)
+        # 2️⃣ Fallback to src
+        if not url:
+            src = img.get("src")
+            if src and src.lower().endswith((".jpg", ".jpeg", ".png")):
+                url = src
 
-    return images[:2]
+        if not url:
+            continue
+
+        url = clean_url(url)
+
+        # 3️⃣ Skip small or irrelevant images
+        if any(x in url.lower() for x in [
+            "logo", "avatar", "icon", "banner", "ads", "wp-content/plugins"
+        ]):
+            continue
+
+        if url not in images:
+            images.append(url)
+
+    return images
