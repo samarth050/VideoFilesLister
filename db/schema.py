@@ -16,7 +16,21 @@ UPDATE Files
 SET category = ?
 WHERE id = ?
 """
-
+SELECT_MOVIE_DETAIL_VIEW = """
+SELECT f.file_name,
+       f.extension,
+       f.year,
+       f.storage_id,
+       f.full_path,
+       f.size_bytes,
+       m.category,
+       m.description,
+       m.cover1_path,
+       m.cover2_path
+FROM Files f
+LEFT JOIN MovieDetails m ON f.id = m.file_id
+WHERE f.id = ?
+"""
 UPDATE_FILE_MOVE = """
 UPDATE Files
 SET storage_id = ?, full_path = ?, creation_date = ?

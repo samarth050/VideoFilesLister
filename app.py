@@ -64,6 +64,7 @@ from db.schema import (
     DB_SELECT_STORAGE_ID,
     MOVIE_DETAILS_INSERT,
     MOVIE_DETAILS_INSERT_MANUAL,
+    SELECT_MOVIE_DETAIL_VIEW,
     SELECT_MOVIE_METADATA_FULL,
     SELECT_MOVIE_METADATA,
     UPDATE_FILES_CATEGORY,
@@ -747,20 +748,7 @@ class FileListerApp:
         cur = conn.cursor()
 
         # Join Files + MovieDetails
-        cur.execute("""
-            SELECT f.file_name,
-                f.extension,
-                f.year,
-                f.storage_id,
-                f.full_path,
-                m.category,
-                m.description,
-                m.cover1_path,
-                m.cover2_path
-            FROM Files f
-            LEFT JOIN MovieDetails m ON f.id = m.file_id
-            WHERE f.id = ?
-        """, (file_id,))
+        cur.execute(SELECT_MOVIE_DETAIL_VIEW, (file_id,))
 
         row = cur.fetchone()
         conn.close()
@@ -768,14 +756,20 @@ class FileListerApp:
         if not row:
             return
 
-        name, ext, year, storage, path, category, desc, cover1, cover2 = row
+        name, ext, year, storage, path, size_bytes, category, desc, cover1, cover2 = row
 
         self.detail_title.config(text=name)
         self.detail_category.config(text=f"Category: {category or 'N/A'}")
         self.detail_year.config(text=f"Year: {year or 'N/A'}")
         self.detail_format.config(text=f"Format: {ext}")
         self.detail_storage.config(text=f"Storage: {storage}")
+        self.detail_size.config(
+            text=f"Size: {format_size(size_bytes)}" if size_bytes else "Size: N/A"
+        )
 
+        self.detail_path.config(
+            text=f"Path: {path}" if path else "Path: N/A"
+        )
         # Enable temporarily
         self.detail_description.configure(state="normal")
 
@@ -816,7 +810,18 @@ class FileListerApp:
         self.detail_year.pack(anchor="w")
         self.detail_format.pack(anchor="w")
         self.detail_storage.pack(anchor="w")
+        self.detail_size = tk.Label(info_frame, text="", font=("Segoe UI", 11))
+        self.detail_size.pack(anchor="w")
 
+        self.detail_path = tk.Label(
+            info_frame,
+            text="",
+            font=("Segoe UI", 10),
+            fg="gray",
+            wraplength=900,
+            justify="left"
+        )
+        self.detail_path.pack(anchor="w")
         # Images
         image_frame = tk.Frame(parent)
         image_frame.pack(pady=10)
