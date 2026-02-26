@@ -110,6 +110,26 @@ def _extract_name_year_from_url(url):
 
     return movie_name, year
 
+def scrape_category_urls(category_url, timeout=15):
+    headers = {
+        "User-Agent": "Mozilla/5.0"
+    }
+
+    response = requests.get(category_url, headers=headers, timeout=timeout)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    urls = set()
+
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+
+        # Match movie pattern like /movie-name-1979/
+        if re.match(r"https://rarelust\.com/.+-\d{4}/?$", href):
+            urls.add(href.rstrip("/"))
+
+    return list(urls)
 
 def _extract_category(full_text):
     raw_block = _extract_raw_category_block(full_text)

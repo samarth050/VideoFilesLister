@@ -99,8 +99,7 @@ from utils.helpers import (
     get_folder_size_bytes
 )
 
-from utils.movie_scraper import scrape_movie
-
+from utils.movie_scraper import scrape_movie, scrape_category_urls
 
 class ExportDialog:
     def __init__(self, parent, options):
@@ -261,6 +260,88 @@ class FileListerApp:
         except:
             pass
 
+    def bulk_update_from_category(self, category_url):
+        urls = scrape_category_urls(category_url)
+
+        if not urls:
+            messagebox.showinfo("No URLs", "No movie links found.")
+            return
+
+        self.show_progress_window(len(urls))
+
+        thread = threading.Thread(
+            target=self._bulk_category_worker,
+            args=(urls,),
+            daemon=True
+        )
+        thread.start()
+
+    def _bulk_category_worker(self, urls):
+        total = len(urls)
+        matched = 0
+        skipped = 0
+
+        for index, url in enumerate(urls, start=1):
+
+            if self.cancel_upgrade:
+                break
+
+            try:
+                file_id, data = self.find_movie_by_url(url)
+
+                if file_id is None:
+                    skipped += 1
+                    self._log_unmatched(url)
+                    continue
+
+                # 🔥 Safeguard: Only update if category empty
+                conn = self.get_connection()
+                cur = conn.cursor()
+                cur.execute("SELECT category FROM Files WHERE id=?", (file_id,))
+                row = cur.fetchone()
+                conn.close()
+
+                current_category_in_db = row[0] if row else None
+
+                if current_category_in_db:
+                    skipped += 1
+                    continue
+
+                matched += 1
+                self._fetch_metadata_worker(file_id, url)
+
+            except Exception as e:
+                self._log_error("CATEGORY", url, str(e))
+
+            self.root.after(
+                0,
+                lambda i=index: self._update_progress_with_eta(i, total)
+            )
+
+        self.root.after(
+            0,
+            lambda: self._finish_category_update(matched, skipped, total)
+        )     
+
+    def _finish_category_update(self, matched, skipped, total):
+        if self.progress_win:
+            self.progress_win.destroy()
+
+        messagebox.showinfo(
+            "Category Update Completed",
+            f"Total URLs: {total}\n"
+            f"Matched & Updated: {matched}\n"
+            f"Skipped (No Match): {skipped}"
+        )
+
+        self.status_var.set("Category batch update completed.")
+
+    def _log_unmatched(self, url):
+        try:
+            with open("unmatched_urls.log", "a", encoding="utf-8") as f:
+                f.write(f"{datetime.datetime.now()} | {url}\n")
+        except:
+            pass
 
     def _copy_url(self):
         try:
@@ -575,18 +656,42 @@ class FileListerApp:
                 self.display_image_from_file(row[3], self.image_label2)
 
 
-    def download_image(self, url, save_path):
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()
+    def download_image(self, url, save_path, retries=2):
+        headers = {
+            "User-Agent": "Mozilla/5.0"
+        }
 
-            with open(save_path, "wb") as f:
-                f.write(response.content)
+        for attempt in range(retries + 1):
+            try:
+                response = requests.get(url, headers=headers, timeout=20)
 
-            return True
-        except Exception as e:
-            print("Image download failed:", e)
-            return False
+                if response.status_code != 200:
+                    raise Exception(f"HTTP {response.status_code}")
+
+                content_type = response.headers.get("Content-Type", "")
+                if "image" not in content_type:
+                    raise Exception("Invalid content type")
+
+                if len(response.content) < 5000:
+                    raise Exception("File too small (likely invalid)")
+
+                with open(save_path, "wb") as f:
+                    f.write(response.content)
+
+                # Validate image before accepting
+                from PIL import Image
+                with Image.open(save_path) as img:
+                    img.verify()
+
+                return True
+
+            except Exception as e:
+                if os.path.exists(save_path):
+                    os.remove(save_path)
+
+                if attempt == retries:
+                    print(f"Image download failed after retries: {url} | {e}")
+                    return False
 
     def display_image_from_file(self, image_path, label_widget):
         try:
@@ -2888,6 +2993,34 @@ class FileListerApp:
         pager = tk.Frame(parent)
         pager.pack(fill="x", pady=4)
         # ---------------------------
+        # Bulk Category Update Frame
+        # ---------------------------
+        bulk_frame = tk.LabelFrame(parent, text="Bulk Update From Category Page", padx=8, pady=6)
+        bulk_frame.pack(fill="x", padx=8, pady=6)
+
+        self.category_url_var = tk.StringVar()
+
+        ttk.Label(bulk_frame, text="Category Page URL:").pack(anchor="w")
+
+        self.category_url_entry = ttk.Entry(
+            bulk_frame,
+            textvariable=self.category_url_var
+        )
+        self.category_url_entry.pack(fill="x", pady=3)
+        # Create context menu
+        self.create_category_url_context_menu()
+
+        # Bind right-click (Windows)
+        self.category_url_entry.bind("<Button-3>", self._show_category_url_menu)
+
+        # Optional macOS support
+        self.category_url_entry.bind("<Control-Button-1>", self._show_category_url_menu)
+        ttk.Button(
+            bulk_frame,
+            text="Update Movies From Page",
+            command=self._start_category_bulk_update
+        ).pack(pady=4)        
+        # ---------------------------
         # Metadata Details Frame
         # ---------------------------
         details_frame = tk.LabelFrame(parent, text="Movie Metadata", padx=8, pady=6)
@@ -2978,20 +3111,71 @@ class FileListerApp:
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
 
-    """
-    def refresh_ui_after_db_update(self, file_id):
-        self.load_db_records()
 
-        for item in self.db_tree.get_children():
-            tags = self.db_tree.item(item, "tags")
-            if tags and str(tags[0]) == str(file_id):
-                self.db_tree.selection_set(item)
-                self.db_tree.focus(item)
-                self.db_tree.see(item)
-                break
+    def _show_category_url_menu(self, event):
+        try:
+            self.category_url_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.category_url_menu.grab_release()
 
-        self.load_movie_metadata(file_id)
-    """
+    def create_category_url_context_menu(self):
+        self.category_url_menu = tk.Menu(self.root, tearoff=0)
+
+        self.category_url_menu.add_command(
+            label="Paste",
+            command=self._paste_category_url
+        )
+        self.category_url_menu.add_command(
+            label="Copy",
+            command=self._copy_category_url
+        )
+        self.category_url_menu.add_command(
+            label="Cut",
+            command=self._cut_category_url
+        )
+        self.category_url_menu.add_separator()
+        self.category_url_menu.add_command(
+            label="Clear",
+            command=lambda: self.category_url_var.set("")
+        )
+    def _paste_category_url(self):
+        try:
+            clipboard = self.root.clipboard_get()
+            self.category_url_var.set(clipboard.strip())
+        except:
+            pass
+
+
+    def _copy_category_url(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.category_url_var.get())
+        except:
+            pass
+
+
+    def _cut_category_url(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.category_url_var.get())
+            self.category_url_var.set("")
+        except:
+            pass
+
+
+    def _start_category_bulk_update(self):
+        url = self.category_url_var.get().strip()
+
+        if not url:
+            messagebox.showwarning("Missing URL", "Please enter a category page URL.")
+            return
+
+        if "rarelust.com/category/" not in url:
+            messagebox.showwarning("Invalid URL", "Please enter a valid Rarelust category URL.")
+            return
+
+        self.bulk_update_from_category(url)
+
     def browse_cover1(self):
         path = filedialog.askopenfilename(
             filetypes=[("Image Files", "*.jpg *.jpeg *.png *.webp")]
