@@ -246,6 +246,37 @@ class FileListerApp:
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
 
+    def create_url_context_menu(self):
+        self.url_menu = tk.Menu(self.root, tearoff=0)
+
+        self.url_menu.add_command(label="Paste", command=self._paste_url)
+        self.url_menu.add_command(label="Copy", command=self._copy_url)
+        self.url_menu.add_command(label="Cut", command=self._cut_url)
+        self.url_menu.add_separator()
+        self.url_menu.add_command(label="Clear", command=lambda: self.meta_url_var.set(""))
+    def _paste_url(self):
+        try:
+            clipboard = self.root.clipboard_get()
+            self.meta_url_var.set(clipboard.strip())
+        except:
+            pass
+
+
+    def _copy_url(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.meta_url_var.get())
+        except:
+            pass
+
+
+    def _cut_url(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.meta_url_var.get())
+            self.meta_url_var.set("")
+        except:
+            pass        
 
     def display_image(self, url, label_widget):
         from PIL import Image, ImageTk
@@ -2755,7 +2786,11 @@ class FileListerApp:
             self.selected_file_id = None
             self.clear_metadata_panel()
 
-
+    def _show_url_menu(self, event):
+        try:
+            self.url_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.url_menu.grab_release()
 
     def setup_db_viewer_tab(self, parent):
         
@@ -2861,7 +2896,18 @@ class FileListerApp:
         ttk.Label(details_frame, text="Metadata URL:").pack(anchor="w")
 
         self.meta_url_var = tk.StringVar()
-        ttk.Entry(details_frame, textvariable=self.meta_url_var).pack(fill="x", pady=3)
+
+        self.meta_url_entry = ttk.Entry(
+            details_frame,
+            textvariable=self.meta_url_var
+        )
+        self.meta_url_entry.pack(fill="x", pady=3)
+
+        # Create context menu
+        self.create_url_context_menu()
+
+        # Bind right-click
+        self.meta_url_entry.bind("<Button-3>", self._show_url_menu)
 
         btn_frame = tk.Frame(details_frame)
         btn_frame.pack(pady=4)
