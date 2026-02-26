@@ -24,6 +24,7 @@ import json
 import sqlite3
 import re
 import subprocess
+import threading
 import sys
 import datetime
 from pathlib import Path
@@ -186,6 +187,10 @@ class FileListerApp:
 
 
         self._font = tkfont.nametofont("TkDefaultFont")
+
+        self.cancel_upgrade = False
+        self.start_time = None
+        self.error_log_path = os.path.join(os.getcwd(), "upgrade_errors.log")
 
         # File data stores
         self.all_files_info = []
@@ -419,76 +424,38 @@ class FileListerApp:
             messagebox.showwarning("URL Required", "Paste metadata URL.")
             return
 
+        # Disable button during work
+        self.status_var.set("Fetching metadata...")
+        self.category_combo.configure(state="disabled")
+
+        thread = threading.Thread(
+            target=self._fetch_metadata_worker,
+            args=(self.selected_file_id, url),
+            daemon=True
+        )
+        thread.start()
+
+    def _fetch_metadata_worker(self, file_id, url):
         try:
-            conn = self.get_connection()
-            cur = conn.cursor()
-
-            # 🔥 Check if metadata already exists
-            cur.execute(SELECT_MOVIE_METADATA_FULL, (self.selected_file_id,))
-
-            row = cur.fetchone()
-
-            # If already fetched and URL unchanged → Load from DB
-            if row and row[0] and row[4] == url:
-                self.category_var.set(row[0])
-
-                self.description_text.delete("1.0", tk.END)
-                self.description_text.insert("1.0", row[1])
-
-                if row[2] and os.path.exists(row[2]):
-                    self.display_image_from_file(row[2], self.image_label1)
-
-                if row[3] and os.path.exists(row[3]):
-                    self.display_image_from_file(row[3], self.image_label2)
-
-                self.status_var.set("Metadata loaded from local database.")
-                conn.close()
-                return
-            # 🔥 Disable manual category editing during fetch
-            self.category_combo.configure(state="disabled")
-            # ----------------------------
-            # SCRAPE (ONLY IF NOT STORED)
-            # ----------------------------
             data = scrape_movie(url)
 
             category = data["category"]
-            # 🔥 Force metadata panel to reflect scraped category
-            self.category_var.set(category)
-
-            # 🔥 Immediately sync combobox display
-            self.category_combo.set(category)
             description = data["description"]
             images = data["images"]
-            # 🔥 Update UI immediately
-            self.category_var.set(category)
-
-            self.description_text.delete("1.0", tk.END)
-            self.description_text.insert("1.0", description)            
-
-            file_id = self.selected_file_id
 
             img1_path = os.path.join(COVERS_DIR, f"{file_id}_1.jpg")
             img2_path = os.path.join(COVERS_DIR, f"{file_id}_2.jpg")
 
-            # ✅ Clear old covers if scraper returned fewer images
-
-            # Remove cover1 if no first image
-            if len(images) == 0 and os.path.exists(img1_path):
-                os.remove(img1_path)
-
-            # Remove cover2 if no second image
-            if len(images) < 2 and os.path.exists(img2_path):
-                os.remove(img2_path)
-
-            # Download covers (only if not already present)
-            if len(images) > 0 and not os.path.exists(img1_path):
+            if len(images) > 0:
                 self.download_image(images[0], img1_path)
 
-            if len(images) > 1 and not os.path.exists(img2_path):
+            if len(images) > 1:
                 self.download_image(images[1], img2_path)
 
-            # Insert or Update MovieDetails
-            cur.execute(MOVIE_DETAILS_INSERT,(
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            cur.execute(MOVIE_DETAILS_INSERT, (
                 file_id,
                 category,
                 description,
@@ -496,16 +463,64 @@ class FileListerApp:
                 img2_path,
                 url
             ))
-            # 🔥 IMPORTANT ADD THIS
+
             cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
+
             conn.commit()
             conn.close()
-            self.refresh_ui_after_db_update(file_id)
-            # 🔥 Re-enable manual category editing
-            self.category_combo.configure(state="normal")
-            self.status_var.set("Metadata fetched and stored locally.")
+
+            # UI update safely
+            self.root.after(0, lambda: self._fetch_metadata_ui_update(file_id))
+
         except Exception as e:
-            messagebox.showerror("Error", str(e))
+            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+
+    def _fetch_metadata_ui_update(self, file_id):
+        self.refresh_ui_after_db_update(file_id)
+        self.category_combo.configure(state="normal")
+        self.status_var.set("Metadata fetched successfully.")
+
+    def show_progress_window(self, total):
+        self.cancel_upgrade = False
+        self.start_time = datetime.datetime.now()
+
+        self.progress_win = tk.Toplevel(self.root)
+        self.progress_win.title("Upgrading Covers...")
+        self.progress_win.geometry("450x180")
+        self.progress_win.transient(self.root)
+        self.progress_win.grab_set()
+
+        tk.Label(self.progress_win, text="Upgrading Covers...",
+                font=("Segoe UI", 10, "bold")).pack(pady=8)
+
+        self.progress_var = tk.IntVar()
+        self.progress_bar = ttk.Progressbar(
+            self.progress_win,
+            maximum=total,
+            variable=self.progress_var,
+            length=400
+        )
+        self.progress_bar.pack(pady=5)
+
+        self.progress_label = tk.Label(self.progress_win, text=f"0 / {total}")
+        self.progress_label.pack()
+
+        self.eta_label = tk.Label(self.progress_win, text="ETA: Calculating...")
+        self.eta_label.pack(pady=4)
+
+        btn_frame = tk.Frame(self.progress_win)
+        btn_frame.pack(pady=10)
+
+        tk.Button(
+            btn_frame,
+            text="Cancel",
+            width=12,
+            command=self._cancel_upgrade
+        ).pack()
+
+    def _cancel_upgrade(self):
+        self.cancel_upgrade = True
+        self.status_var.set("Cancelling... Please wait.")
 
     def load_metadata_from_db(self):
         conn = self.get_connection()
@@ -566,42 +581,41 @@ class FileListerApp:
         if not self.current_db_path:
             return
 
-        if not messagebox.askyesno(
-            "Upgrade Covers",
-            "This will scan all movies and upgrade low-resolution covers.\nContinue?"
-        ):
+        conn = self.get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT file_id, metadata_url, cover1_path, cover2_path
+            FROM MovieDetails
+        """)
+        rows = cur.fetchall()
+        conn.close()
+
+        if not rows:
             return
 
-        try:
-            conn = self.get_connection()
-            cur = conn.cursor()
+        self.show_progress_window(len(rows))
 
-            cur.execute("""
-                SELECT file_id, metadata_url, cover1_path, cover2_path
-                FROM MovieDetails
-            """)
-            rows = cur.fetchall()
+        thread = threading.Thread(
+            target=self._upgrade_worker,
+            args=(rows,),
+            daemon=True
+        )
+        thread.start()
 
-            upgraded = 0
+    def _upgrade_worker(self, rows):
+        total = len(rows)
+        upgraded = 0
 
-            for file_id, url, cover1, cover2 in rows:
+        for index, (file_id, url, cover1, cover2) in enumerate(rows, start=1):
 
-                if not url:
-                    continue
+            if self.cancel_upgrade:
+                break
 
-                need_upgrade = False
+            if not url:
+                continue
 
-                if cover1 and os.path.exists(cover1):
-                    if self.is_low_resolution(cover1):
-                        need_upgrade = True
-
-                if cover2 and os.path.exists(cover2):
-                    if self.is_low_resolution(cover2):
-                        need_upgrade = True
-
-                if not need_upgrade:
-                    continue
-
+            try:
                 data = scrape_movie(url)
                 images = data.get("images", [])
 
@@ -616,15 +630,59 @@ class FileListerApp:
 
                 upgraded += 1
 
-            conn.close()
+            except Exception as e:
+                self._log_error(file_id, url, str(e))
 
+            # Update progress + ETA safely
+            self.root.after(0, lambda i=index: self._update_progress_with_eta(i, total))
+
+        self.root.after(0, lambda: self._finish_upgrade(upgraded, total))
+
+    def _update_progress_with_eta(self, current, total):
+        self.progress_var.set(current)
+        self.progress_label.config(text=f"{current} / {total}")
+
+        if current == 0:
+            return
+
+        elapsed = (datetime.datetime.now() - self.start_time).total_seconds()
+        avg_time = elapsed / current
+        remaining = avg_time * (total - current)
+
+        eta_str = str(datetime.timedelta(seconds=int(remaining)))
+        self.eta_label.config(text=f"ETA: {eta_str}")        
+
+    def _log_error(self, file_id, url, error_message):
+        try:
+            with open(self.error_log_path, "a", encoding="utf-8") as f:
+                f.write(
+                    f"[{datetime.datetime.now()}] "
+                    f"FileID: {file_id} | URL: {url} | Error: {error_message}\n"
+                )
+        except:
+            pass
+
+    def _update_progress(self, current, total):
+        self.progress_var.set(current)
+        self.progress_label.config(text=f"{current} / {total}")
+
+
+    def _finish_upgrade(self, upgraded, total):
+        if self.progress_win:
+            self.progress_win.destroy()
+
+        if self.cancel_upgrade:
+            messagebox.showwarning(
+                "Cancelled",
+                f"Upgrade cancelled.\nCompleted: {self.progress_var.get()} / {total}"
+            )
+            self.status_var.set("Upgrade cancelled.")
+        else:
             messagebox.showinfo(
                 "Completed",
-                f"{upgraded} movie covers upgraded to full resolution."
+                f"{upgraded} covers upgraded successfully."
             )
-
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+            self.status_var.set("Bulk cover upgrade completed.")
 
     def save_metadata(self):
         if not self.selected_file_id:
