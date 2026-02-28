@@ -696,7 +696,7 @@ class FileListerApp:
     def display_image_from_file(self, image_path, label_widget):
         try:
             img = Image.open(image_path)
-            img = img.resize((200, 300))
+            img = img.resize((220, 280))
             photo = ImageTk.PhotoImage(img)
 
             label_widget.configure(image=photo)
@@ -1024,6 +1024,18 @@ class FileListerApp:
             return
 
         name, ext, year, storage, path, size_bytes, category, desc, cover1, cover2 = row
+        # ✅ CLEAR OLD IMAGES FIRST
+        if hasattr(self, "detail_image1"):
+            self.detail_image1.config(image="")
+            self.detail_image1.image = None
+
+        if hasattr(self, "detail_image2"):
+            self.detail_image2.config(image="")
+            self.detail_image2.image = None
+
+        self.detail_cover1_path = None
+        self.detail_cover2_path = None
+
         self.detail_cover1_path = cover1
         self.detail_cover2_path = cover2
         self.detail_title.config(text=name)
@@ -2525,13 +2537,17 @@ class FileListerApp:
             cur = conn.cursor()
 
             cur.execute(SELECT_MOVIE_METADATA, (file_id,))
-
             row = cur.fetchone()
             conn.close()
 
-            # Clear panel first
+            # -------------------------
+            # Clear panel FIRST
+            # -------------------------
+            self.meta_url_var.set("")
             self.category_var.set("")
             self.description_text.delete("1.0", tk.END)
+            self.cover1_local_path.set("")
+            self.cover2_local_path.set("")
 
             if hasattr(self, "image_label1"):
                 self.image_label1.config(image="")
@@ -2544,17 +2560,14 @@ class FileListerApp:
             if not row:
                 return
 
+            # Adjust unpacking based on your SELECT
             category, description, cover1_path, cover2_path = row
 
-            # Load category
-            if category:
-                self.category_var.set(category)
+            self.category_var.set(category or "")
+            self.description_text.insert("1.0", description or "")
+            self.cover1_local_path.set(cover1_path or "")
+            self.cover2_local_path.set(cover2_path or "")
 
-            # Load description
-            if description:
-                self.description_text.insert("1.0", description)
-
-            # Load images from local files
             if cover1_path and os.path.exists(cover1_path):
                 self.display_image_from_file(cover1_path, self.image_label1)
 
@@ -3020,89 +3033,118 @@ class FileListerApp:
             text="Update Movies From Page",
             command=self._start_category_bulk_update
         ).pack(pady=4)        
+
         # ---------------------------
-        # Metadata Details Frame
+        # Metadata Details Frame (Redesigned)
         # ---------------------------
         details_frame = tk.LabelFrame(parent, text="Movie Metadata", padx=8, pady=6)
         details_frame.pack(fill="x", padx=8, pady=8)
-        # URL entry
-        ttk.Label(details_frame, text="Metadata URL:").pack(anchor="w")
 
+        # Configure 2-column layout
+        details_frame.columnconfigure(0, weight=1)  # Form
+        details_frame.columnconfigure(1, weight=0)  # Cover 1
+        details_frame.columnconfigure(2, weight=0)  # Cover 2
+        details_frame.rowconfigure(0, weight=1)
+
+        # ---------------- LEFT SIDE (FORM) ----------------
+        form_frame = ttk.Frame(details_frame)
+        form_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
+
+        form_frame.columnconfigure(1, weight=1)
+        form_frame.rowconfigure(3, weight=1)  # description row expands
+
+        # Metadata URL
+        ttk.Label(form_frame, text="Metadata URL:").grid(row=0, column=0, sticky="w")
         self.meta_url_var = tk.StringVar()
 
         self.meta_url_entry = ttk.Entry(
-            details_frame,
-            textvariable=self.meta_url_var
+            form_frame,
+            textvariable=self.meta_url_var,
+            width=50
         )
-        self.meta_url_entry.pack(fill="x", pady=3)
+        self.meta_url_entry.grid(row=0, column=1, sticky="ew", pady=2)
 
-        # Create context menu
         self.create_url_context_menu()
-
-        # Bind right-click
         self.meta_url_entry.bind("<Button-3>", self._show_url_menu)
 
-        btn_frame = tk.Frame(details_frame)
-        btn_frame.pack(pady=4)
+        # Buttons row
+        btn_frame = ttk.Frame(form_frame)
+        btn_frame.grid(row=1, column=1, sticky="w", pady=4)
 
         ttk.Button(btn_frame, text="Fetch Metadata",
-                command=self.fetch_metadata).pack(side="left", padx=5)
+                command=self.fetch_metadata).pack(side="left", padx=4)
 
         ttk.Button(btn_frame, text="🔄 Refresh Metadata",
-                command=self.refresh_metadata).pack(side="left", padx=5)
-        ttk.Button(
-            btn_frame,
-            text="⚡ Auto Update by URL",
-            command=self.auto_update_by_url
-        ).pack(side="left", padx=5)
-        # Category field
-        category_frame = ttk.Frame(details_frame)
-        category_frame.pack(fill="x", pady=5)
+                command=self.refresh_metadata).pack(side="left", padx=4)
 
-        ttk.Label(category_frame, text="Category:").pack(side="left")
+        ttk.Button(btn_frame, text="⚡ Auto Update",
+                command=self.auto_update_by_url).pack(side="left", padx=4)
+
+        # Category
+        ttk.Label(form_frame, text="Category:").grid(row=2, column=0, sticky="w", pady=(6, 0))
 
         self.category_combo = ttk.Combobox(
-            category_frame,
+            form_frame,
             textvariable=self.category_var,
             values=self.get_all_categories(),
             state="normal",
-            width=25
+            width=30
         )
-        self.category_combo.pack(side="left", padx=5)
+        self.category_combo.grid(row=2, column=1, sticky="w", pady=(6, 0))
 
-        ttk.Button(
-            category_frame,
-            text="Bulk Edit",
-            command=self.open_bulk_category_editor
-        ).pack(side="right")
+        # Description
+        ttk.Label(form_frame, text="Description:").grid(row=3, column=0, sticky="nw", pady=(6, 0))
 
-        # Description field
-        ttk.Label(details_frame, text="Description:").pack(anchor="w")
-        self.description_text = tk.Text(details_frame, height=6)
-        self.description_text.pack(fill="both", pady=3)
+        self.description_text = tk.Text(form_frame, height=4, width=50)
+        self.description_text.grid(row=3, column=1, sticky="nsew", pady=(6, 0))
 
-        ttk.Label(details_frame, text="Cover 1:").pack(anchor="w", pady=(5, 0))
+        # Cover 1
+        ttk.Label(form_frame, text="Cover 1:").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(form_frame, textvariable=self.cover1_local_path,
+                width=50).grid(row=4, column=1, sticky="ew")
 
-        ttk.Entry(details_frame, textvariable=self.cover1_local_path, width=50).pack(fill="x", padx=5)
+        ttk.Button(form_frame, text="Browse",
+                command=self.browse_cover1).grid(row=4, column=2, padx=4)
 
-        ttk.Button(details_frame, text="Browse", command=self.browse_cover1).pack(anchor="e", padx=5, pady=(0, 5))
+        # Cover 2
+        ttk.Label(form_frame, text="Cover 2:").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        ttk.Entry(form_frame, textvariable=self.cover2_local_path,
+                width=50).grid(row=5, column=1, sticky="ew")
 
-        ttk.Label(details_frame, text="Cover 2:").pack(anchor="w", pady=(5, 0))
-        ttk.Entry(details_frame, textvariable=self.cover2_local_path, width=50).pack(fill="x", padx=5)
-        ttk.Button(details_frame, text="Browse", command=self.browse_cover2).pack(anchor="e", padx=5, pady=(0, 5))
+        ttk.Button(form_frame, text="Browse",
+                command=self.browse_cover2).grid(row=5, column=2, padx=4)
 
-        ttk.Button(details_frame, text="Save Metadata",
-                command=self.save_metadata).pack(pady=5)
-        
-        # Image preview frame
-        image_frame = tk.Frame(details_frame)
-        image_frame.pack(pady=6)
+        # Save Button
+        ttk.Button(form_frame, text="Save Metadata",
+                command=self.save_metadata).grid(row=6, column=1, pady=8, sticky="w")
 
-        self.image_label1 = tk.Label(image_frame)
-        self.image_label1.pack(side="left", padx=10)
+        # ---------------- RIGHT SIDE (IMAGES) ----------------
+        # ---------------- COVER 1 ----------------
+        cover1_frame = ttk.Frame(details_frame)
+        cover1_frame.grid(row=0, column=1, sticky="n", padx=10)
 
-        self.image_label2 = tk.Label(image_frame)
-        self.image_label2.pack(side="left", padx=10)
+        ttk.Label(cover1_frame, text="Cover 1").pack()
+
+        self.image_label1 = tk.Label(
+            cover1_frame,
+            relief="solid",
+            bd=1
+        )
+        self.image_label1.pack(pady=5)
+
+
+        # ---------------- COVER 2 ----------------
+        cover2_frame = ttk.Frame(details_frame)
+        cover2_frame.grid(row=0, column=2, sticky="n", padx=10)
+
+        ttk.Label(cover2_frame, text="Cover 2").pack()
+
+        self.image_label2 = tk.Label(
+            cover2_frame,
+            relief="solid",
+            bd=1
+        )
+        self.image_label2.pack(pady=5)
 
         tk.Button(pager, text="|< First", command=self.first_db_page).pack(side="left", padx=4)
         tk.Button(pager, text="<< Prev", command=self.prev_db_page).pack(side="left", padx=4)
