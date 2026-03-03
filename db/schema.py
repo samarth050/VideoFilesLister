@@ -74,9 +74,12 @@ ORDER BY extension
 
 # Category Queries
 SELECT_ALL_CATEGORIES = """
-SELECT name
-FROM Categories
-ORDER BY name
+SELECT DISTINCT TRIM(category) AS category FROM Files
+WHERE TRIM(category) IS NOT NULL AND TRIM(category) != ''
+UNION
+SELECT DISTINCT TRIM(category) FROM MovieDetails
+WHERE TRIM(category) IS NOT NULL AND TRIM(category) != ''
+ORDER BY category
 """
 
 INSERT_CATEGORY = """

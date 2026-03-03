@@ -29,6 +29,7 @@ import sys
 import datetime
 from pathlib import Path
 from collections import defaultdict
+from functools import partial
 
 # ===============================
 # Third-Party Libraries
@@ -211,7 +212,9 @@ class FileListerApp:
         self.total_pages = 0
         self._db_sort_reverse = {}
         self.storage_id_var = tk.StringVar(value="UNKNOWN")
-
+        # --- Gallery Pagination State ---
+        self.gallery_offset = 0
+        self.gallery_limit = 15   # 15 per page (safe for 300+)
         # --- Duplicate pagination ---
         self.dup_all_rows = []
         self.dup_current_page = 0
@@ -239,6 +242,212 @@ class FileListerApp:
 
         # Populate combos AFTER UI + DB are ready
         self.root.after(100, self.load_storage_ids_from_db)
+
+    def load_gallery_categories(self):
+
+        if not self.current_db_path:
+            return
+
+        categories = self.get_all_categories()
+
+        #print("Gallery categories from DB:", categories)
+
+        category_list = ["All"] + categories
+
+        self.gallery_category_combo["values"] = category_list
+        self.gallery_category_var.set("All")
+
+    def build_gallery_ui(self):
+
+        # ==============================
+        # TOP SEPARATOR
+        # ==============================
+        ttk.Separator(self.gallery_tab, orient="horizontal").pack(fill="x", pady=5)
+
+        # ==============================
+        # CATEGORY FILTER (CENTERED)
+        # ==============================
+        filter_frame = ttk.Frame(self.gallery_tab)
+        filter_frame.pack(pady=5)
+
+        ttk.Label(filter_frame, text="Category:", font=("Segoe UI", 10, "bold")).pack(side="left")
+
+        self.gallery_category_var = tk.StringVar(value="All")
+
+        self.gallery_category_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.gallery_category_var,
+            state="readonly",
+            width=25
+        )
+        self.gallery_category_combo.pack(side="left", padx=5)
+
+        self.gallery_category_combo.bind(
+            "<<ComboboxSelected>>",
+            self.on_gallery_category_changed
+        )
+
+        # ==============================
+        # SECOND SEPARATOR
+        # ==============================
+        ttk.Separator(self.gallery_tab, orient="horizontal").pack(fill="x", pady=5)
+
+        # ==============================
+        # SCROLLABLE THUMBNAIL AREA
+        # ==============================
+        self.gallery_canvas = tk.Canvas(self.gallery_tab)
+        self.gallery_scrollbar = ttk.Scrollbar(
+            self.gallery_tab,
+            orient="vertical",
+            command=self.gallery_canvas.yview
+        )
+
+        self.gallery_frame = ttk.Frame(self.gallery_canvas)
+
+        self.gallery_frame.bind(
+            "<Configure>",
+            lambda e: self.gallery_canvas.configure(
+                scrollregion=self.gallery_canvas.bbox("all")
+            )
+        )
+
+        self.gallery_canvas.create_window((0, 0), window=self.gallery_frame, anchor="nw")
+        self.gallery_canvas.configure(yscrollcommand=self.gallery_scrollbar.set)
+
+        self.gallery_canvas.pack(side="left", fill="both", expand=True)
+        self.gallery_scrollbar.pack(side="right", fill="y")
+
+        self.thumbnail_refs = []
+
+        # ==============================
+        # BOTTOM SEPARATOR
+        # ==============================
+        ttk.Separator(self.gallery_tab, orient="horizontal").pack(fill="x", pady=5)
+
+        # ==============================
+        # LOAD MORE BUTTON
+        # ==============================
+        self.load_more_btn = ttk.Button(
+            self.gallery_tab,
+            text="Load More",
+            command=self.load_more_gallery
+        )
+        self.load_more_btn.pack(pady=8)        
+
+    def load_gallery(self):
+        if not self.current_db_path:
+            return
+
+        # Reset
+        self.gallery_offset = 0
+
+        for widget in self.gallery_frame.winfo_children():
+            widget.destroy()
+
+        self.thumbnail_refs.clear()
+
+        self.load_more_gallery()
+
+    def on_gallery_category_changed(self, event=None):
+        self.gallery_offset = 0
+
+        for widget in self.gallery_frame.winfo_children():
+            widget.destroy()
+
+        self.thumbnail_refs.clear()
+
+        self.load_more_btn.config(state="normal")
+
+        self.load_more_gallery()
+
+    def load_more_gallery(self):
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            selected_category = self.gallery_category_var.get()
+
+            if selected_category == "All":
+                query = """
+                    SELECT file_id, cover1_path
+                    FROM MovieDetails
+                    WHERE cover1_path IS NOT NULL
+                    AND cover1_path != ''
+                    LIMIT ? OFFSET ?
+                """
+                params = (self.gallery_limit, self.gallery_offset)
+
+            else:
+                query = """
+                    SELECT file_id, cover1_path
+                    FROM MovieDetails
+                    WHERE cover1_path IS NOT NULL
+                    AND cover1_path != ''
+                    AND category = ?
+                    LIMIT ? OFFSET ?
+                """
+                params = (selected_category,
+                        self.gallery_limit,
+                        self.gallery_offset)
+
+            cur.execute(query, params)
+
+            rows = cur.fetchall()
+            conn.close()
+
+            if not rows:
+                self.load_more_btn.config(state="disabled")
+                return
+
+            columns = 5
+            existing_widgets = len(self.gallery_frame.winfo_children())
+            row_num = existing_widgets // columns
+            col_num = existing_widgets % columns
+
+            for file_id, image_path in rows:
+
+                if not os.path.exists(image_path):
+                    continue
+
+                img = Image.open(image_path)
+                img.thumbnail((160, 230))
+                photo = ImageTk.PhotoImage(img)
+
+                lbl = tk.Label(self.gallery_frame,
+                            image=photo,
+                            cursor="hand2",
+                            bd=2,
+                            relief="ridge")
+
+                lbl.image = photo
+                self.thumbnail_refs.append(photo)
+
+                lbl.grid(row=row_num, column=col_num, padx=10, pady=10)
+
+                lbl.bind(
+                    "<Button-1>",
+                    partial(self.open_movie_from_gallery, file_id)
+                )
+
+                col_num += 1
+                if col_num >= columns:
+                    col_num = 0
+                    row_num += 1
+
+            self.gallery_offset += self.gallery_limit
+
+        except Exception as e:
+            print("Gallery pagination error:", e)
+
+    def open_movie_from_gallery(self, file_id, event=None):
+        self.selected_file_id = int(file_id)
+
+        self.notebook.select(self.movie_details_tab)
+
+        # EXACT same logic as DB viewer
+        self.load_movie_detail_view(self.selected_file_id)
+        self.load_movie_metadata(self.selected_file_id)
+
 
     def get_connection(self):
         conn = sqlite3.connect(self.current_db_path)
@@ -1169,30 +1378,42 @@ class FileListerApp:
         main_tab = ttk.Frame(self.notebook)
         stats_tab = ttk.Frame(self.notebook)
         db_tab = ttk.Frame(self.notebook)
-        details_tab = ttk.Frame(self.notebook)
+        self.gallery_tab = ttk.Frame(self.notebook)      # ✅ store reference
+        self.movie_details_tab = ttk.Frame(self.notebook)  # ✅ store reference
         dup_tab = ttk.Frame(self.notebook)
+
         self.notebook.add(main_tab, text="Files List")
         self.notebook.add(stats_tab, text="Statistics")
         self.notebook.add(db_tab, text="SQLite Viewer")
-        self.notebook.add(details_tab, text="Movie Details")
+        self.notebook.add(self.gallery_tab, text="Gallery")
+        self.notebook.add(self.movie_details_tab, text="Movie Details")
         self.notebook.add(dup_tab, text="Duplicates")
+
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
+
         self.setup_main_tab(main_tab)
         self.setup_stats_tab(stats_tab)
         self.setup_db_viewer_tab(db_tab)
-        self.setup_movie_details_tab(details_tab)    
+        self.setup_movie_details_tab(self.movie_details_tab)
         self.setup_duplicates_tab(dup_tab)
 
+        self.build_gallery_ui()   # ✅ initialize gallery UI
 
         self.status_var = tk.StringVar()
         tk.Label(self.root, textvariable=self.status_var,
-                 relief=tk.SUNKEN, bd=1, anchor="w").pack(fill="x", side="bottom")
+                relief=tk.SUNKEN, bd=1, anchor="w").pack(fill="x", side="bottom")
 
     def on_tab_changed(self, event):
-        if self.notebook.tab(self.notebook.select(), "text") == "Statistics":
+        selected_tab = self.notebook.tab(self.notebook.select(), "text")
+
+        if selected_tab == "Statistics":
             self.update_db_statistics()
             self.update_status_bar_db_info()
             self.draw_extension_pie_chart()
+
+        elif selected_tab == "Gallery":
+            self.load_gallery_categories()
+            self.load_gallery()
 
     def reset_scan(self):
         """Clear scanned file results and reset UI"""
@@ -1735,13 +1956,20 @@ class FileListerApp:
 
     def get_all_categories(self):
         try:
+            #print("Current DB path:", self.current_db_path)  # DEBUG
+
             conn = self.get_connection()
             cur = conn.cursor()
             cur.execute(SELECT_ALL_CATEGORIES)
             rows = cur.fetchall()
             conn.close()
+
+            #print("Category rows:", rows)  # DEBUG
+
             return [r[0] for r in rows]
-        except:
+
+        except Exception as e:
+            print("CATEGORY FETCH ERROR:", e)
             return []
 
     def add_new_category(self, name):
