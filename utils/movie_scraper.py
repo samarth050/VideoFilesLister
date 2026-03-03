@@ -141,36 +141,29 @@ def _extract_category(full_text):
 
     matched = []
 
-    # 1️⃣ Match controlled categories
-    for cat in KNOWN_CATEGORIES:
+    # 🔥 Sort by length DESC so longer phrases match first
+    for cat in sorted(KNOWN_CATEGORIES, key=len, reverse=True):
         pattern = r"\b" + re.escape(cat) + r"\b"
         if re.search(pattern, raw_block, re.IGNORECASE):
-            matched.append(cat)
 
-    # 2️⃣ Remove duplicates while preserving order
-    seen = set()
-    unique_matched = []
-    for cat in matched:
-        if cat not in seen:
-            unique_matched.append(cat)
-            seen.add(cat)
+            # Prevent adding shorter category if it is part of a longer one
+            if not any(cat in existing for existing in matched):
+                matched.append(cat)
 
-    # 3️⃣ If controlled matches found → return them
-    if unique_matched:
-        return ", ".join(sorted(unique_matched))
+    if matched:
+        return ", ".join(sorted(matched))
 
-    # 4️⃣ Otherwise fallback to raw block (cleaned)
-    # Split raw block by commas and deduplicate
+    # Fallback to raw block
     raw_parts = [p.strip() for p in raw_block.split(",") if p.strip()]
 
-    seen_raw = set()
-    unique_raw = []
+    seen = set()
+    unique = []
     for part in raw_parts:
-        if part.lower() not in seen_raw:
-            unique_raw.append(part)
-            seen_raw.add(part.lower())
+        if part.lower() not in seen:
+            unique.append(part)
+            seen.add(part.lower())
 
-    return ", ".join(sorted(unique_raw))
+    return ", ".join(sorted(unique))
 
 
 def _extract_raw_category_block(full_text):
