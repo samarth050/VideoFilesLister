@@ -10,6 +10,60 @@ SELECT category, description, cover1_path, cover2_path
 FROM MovieDetails
 WHERE file_id = ?
 """
+# Movie Details View
+DROP_METADATA_VIEW = """
+DROP VIEW IF EXISTS MetadataStatusView;
+"""
+
+CREATE_METADATA_VIEW = """
+CREATE VIEW MetadataStatusView AS
+SELECT
+    f.id,
+    f.file_name,
+    f.extension,
+    f.size_bytes,
+    f.storage_id,
+    f.creation_date,
+    f.full_path,
+    f.year,
+
+    COALESCE(m.category, f.category) AS category,
+
+    CASE
+        WHEN m.file_id IS NULL
+            THEN 'NO_METADATA'
+
+        WHEN
+            (m.category IS NULL OR m.category='')
+         OR (m.description IS NULL OR m.description='')
+         OR (m.cover1_path IS NULL OR m.cover1_path='')
+         OR (m.cover2_path IS NULL OR m.cover2_path='')
+            THEN 'INCOMPLETE'
+
+        ELSE 'COMPLETE'
+    END AS metadata_status
+
+FROM Files f
+LEFT JOIN MovieDetails m
+ON f.id = m.file_id
+"""
+METADATA_STATUS_STATS = """
+SELECT
+COUNT(*) AS total_files,
+
+SUM(CASE WHEN v.metadata_status='COMPLETE' THEN 1 ELSE 0 END) AS complete_count,
+SUM(CASE WHEN v.metadata_status='INCOMPLETE' THEN 1 ELSE 0 END) AS incomplete_count,
+SUM(CASE WHEN v.metadata_status='NO_METADATA' THEN 1 ELSE 0 END) AS no_metadata_count,
+
+SUM(CASE WHEN m.category IS NULL OR m.category='' THEN 1 ELSE 0 END) AS missing_category,
+SUM(CASE WHEN m.description IS NULL OR m.description='' THEN 1 ELSE 0 END) AS missing_description,
+SUM(CASE WHEN m.cover1_path IS NULL OR m.cover1_path='' THEN 1 ELSE 0 END) AS missing_cover1,
+SUM(CASE WHEN m.cover2_path IS NULL OR m.cover2_path='' THEN 1 ELSE 0 END) AS missing_cover2
+
+FROM Files f
+LEFT JOIN MovieDetails m ON f.id = m.file_id
+LEFT JOIN MetadataStatusView v ON f.id = v.id
+"""
 # File Operations
 UPDATE_FILES_CATEGORY = """
 UPDATE Files
@@ -93,27 +147,35 @@ FROM Files
 ORDER BY category
 """
 
-
 MOVIE_DETAILS_INSERT = """
- INSERT INTO MovieDetails
- (file_id, category, description, cover1_path, cover2_path, metadata_url)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT(file_id) DO UPDATE SET
-        category=excluded.category,
-        description=excluded.description,
-        cover1_path=excluded.cover1_path,
-        cover2_path=excluded.cover2_path,
-        metadata_url=excluded.metadata_url
+INSERT INTO MovieDetails
+(file_id, category, description, cover1_path, cover2_path, metadata_url)
+VALUES (?, ?, ?, ?, ?, ?)
+
+ON CONFLICT(file_id) DO UPDATE SET
+    category = excluded.category,
+    description = excluded.description,
+    cover1_path = excluded.cover1_path,
+    cover2_path = excluded.cover2_path,
+    metadata_url = excluded.metadata_url
+
+WHERE
+    MovieDetails.category IS NULL
+    OR MovieDetails.description IS NULL
+    OR MovieDetails.cover1_path IS NULL
+    OR MovieDetails.cover2_path IS NULL
 """
 MOVIE_DETAILS_INSERT_MANUAL = """
-INSERT INTO MovieDetails 
-(file_id, category, description, cover1_path, cover2_path)
-    VALUES (?, ?, ?, ?, ?)
-    ON CONFLICT(file_id) DO UPDATE SET
-        category=excluded.category,
-        description=excluded.description,
-        cover1_path=COALESCE(excluded.cover1_path, cover1_path),
-        cover2_path=COALESCE(excluded.cover2_path, cover2_path)
+INSERT INTO MovieDetails
+(file_id, category, description, cover1_path, cover2_path, metadata_url)
+VALUES (?, ?, ?, ?, ?, ?)
+
+ON CONFLICT(file_id) DO UPDATE SET
+    category = excluded.category,
+    description = excluded.description,
+    cover1_path = COALESCE(excluded.cover1_path, MovieDetails.cover1_path),
+    cover2_path = COALESCE(excluded.cover2_path, MovieDetails.cover2_path),
+    metadata_url = COALESCE(excluded.metadata_url, MovieDetails.metadata_url)
 """
 FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS Files (

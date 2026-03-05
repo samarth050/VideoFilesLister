@@ -58,6 +58,7 @@ except ImportError:
 # ===============================
 
 from db.schema import (
+    DROP_METADATA_VIEW,
     FILES_TABLE_SQL,
     MOVIE_TABLE_SQL,
     FILES_TABLE_INDEX,
@@ -67,7 +68,9 @@ from db.schema import (
     MOVIE_DETAILS_INSERT,
     MOVIE_DETAILS_INSERT_MANUAL,
     SELECT_MOVIE_DETAIL_VIEW,
+    METADATA_STATUS_STATS,
     SELECT_MOVIE_METADATA_FULL,
+    CREATE_METADATA_VIEW,
     SELECT_MOVIE_METADATA,
     UPDATE_FILES_CATEGORY,
     UPDATE_FILE_MOVE,
@@ -3138,6 +3141,60 @@ class FileListerApp:
         finally:
             self.url_menu.grab_release()
 
+    def metadata_dot(self, status):
+
+        if status == "COMPLETE":
+            return "🟢"
+
+        elif status == "INCOMPLETE":
+            return "🟡"
+
+        else:
+            return "🔴"
+
+    def update_metadata_status_summary(self):
+
+        if not self.current_db_path:
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            cur.execute(METADATA_STATUS_STATS)
+            row = cur.fetchone()
+
+            conn.close()
+
+            (
+                total,
+                complete,
+                incomplete,
+                missing_meta,
+                miss_cat,
+                miss_desc,
+                miss_c1,
+                miss_c2
+            ) = row
+
+            text = (
+                f"Metadata Status  |  "
+                f"Total: {total}   "
+                f"Complete: {complete}   "
+                f"Incomplete: {incomplete}   "
+                f"No Metadata: {missing_meta}   "
+                f"| Missing → "
+                f"Category:{miss_cat}  "
+                f"Description:{miss_desc}  "
+                f"Cover1:{miss_c1}  "
+                f"Cover2:{miss_c2}"
+            )
+
+            self.meta_status_label.config(text=text)
+
+        except Exception as e:
+            print("Metadata summary error:", e)
+
     def setup_db_viewer_tab(self, parent):
         
         # ---------- Storage ID Filter ----------
@@ -3185,7 +3242,21 @@ class FileListerApp:
         )
         self.db_category_combo.pack(side="left", padx=4)
         self.db_category_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
-        
+
+        tk.Label(top, text="Metadata:").pack(side="left", padx=(8,0))
+
+        self.meta_filter_var = tk.StringVar(value="All")
+
+        self.meta_filter_combo = ttk.Combobox(
+            top,
+            textvariable=self.meta_filter_var,
+            values=["All","Complete","Incomplete","No Metadata"],
+            state="readonly",
+            width=15
+        )
+
+        self.meta_filter_combo.pack(side="left", padx=4)
+        self.meta_filter_combo.bind("<<ComboboxSelected>>", lambda e: self.load_db_records())    
         
         tk.Label(top, text="Page size:").pack(side="left", padx=(8,0))
         self.page_size_var = tk.IntVar(value=self.page_size)
@@ -3201,6 +3272,16 @@ class FileListerApp:
 
         tk.Button(top, text="Delete Selected", width=16,
                 command=self.delete_selected_db_rows).pack(side="right", padx=6)
+        # -----------------------------
+        # Metadata Status Summary Label
+        # -----------------------------
+        self.meta_status_label = tk.Label(
+            parent,
+            text="Metadata Status",
+            anchor="w",
+            font=("Segoe UI", 9)
+        )
+        self.meta_status_label.pack(fill="x", padx=8, pady=2)        
 
         cols = ("No", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
 
@@ -3209,7 +3290,9 @@ class FileListerApp:
 
         # ✅ CREATE TREE FIRST
         self.db_tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
+    
         self.db_tree.bind("<<TreeviewSelect>>", self.on_db_row_select)
+
 
         # ✅ HEADINGS + SORT
         for c in cols:
@@ -3225,6 +3308,9 @@ class FileListerApp:
 
         self.db_tree.pack(side="left", fill="both", expand=True)
 
+        self.db_tree.tag_configure("meta_complete", background="#e6ffe6")
+        self.db_tree.tag_configure("meta_incomplete", background="#fff5cc")
+        self.db_tree.tag_configure("meta_missing", background="#ffe6e6")
         scroll = ttk.Scrollbar(frame, command=self.db_tree.yview)
         scroll.pack(side="right", fill="y")
         self.db_tree.configure(yscrollcommand=scroll.set)
@@ -4119,14 +4205,52 @@ class FileListerApp:
             conn = self.get_connection()
             cur = conn.cursor()
 
+            # Ensure metadata status view exists
+            cur.execute(DROP_METADATA_VIEW)
+            cur.execute(CREATE_METADATA_VIEW)
+
             selected_sid = self.selected_storage_filter.get()
 
-            if selected_sid == "ALL":
-                cur.execute(DB_SELECT_ALL)
-            else:
-                cur.execute(DB_SELECT_STORAGE_ID, (selected_sid,))
+            meta_filter = getattr(self, "meta_filter_var", tk.StringVar(value="All")).get()
+
+            query = """
+            SELECT
+            id,
+            file_name,
+            extension,
+            size_bytes,
+            storage_id,
+            creation_date,
+            full_path,
+            year,
+            category,
+            metadata_status
+            FROM MetadataStatusView
+            """
+
+            params = []
+
+            # Storage filter
+            if selected_sid != "ALL":
+                query += " WHERE storage_id = ?"
+                params.append(selected_sid)
+
+            # Metadata filter
+            if meta_filter == "Complete":
+                query += " AND metadata_status='COMPLETE'" if params else " WHERE metadata_status='COMPLETE'"
+
+            elif meta_filter == "Incomplete":
+                query += " AND metadata_status='INCOMPLETE'" if params else " WHERE metadata_status='INCOMPLETE'"
+
+            elif meta_filter == "No Metadata":
+                query += " AND metadata_status='NO_METADATA'" if params else " WHERE metadata_status='NO_METADATA'"
+
+            query += " ORDER BY id DESC"
+
+            cur.execute(query, params)
 
             rows = cur.fetchall()
+
             conn.close()
 
         except Exception as e:
@@ -4148,31 +4272,45 @@ class FileListerApp:
         self.update_db_statistics()
         self.update_status_bar_db_info()
         self.load_category_dropdown()
-
+        # Update metadata statistics
+        self.update_metadata_status_summary()
         # ✅ refresh Storage ID dropdown
         #self.load_storage_ids_from_db()
 
-
-
     def refresh_db_tree(self, rows):
+
         self.db_tree.delete(*self.db_tree.get_children())
 
         start = self.current_page * self.page_size
 
         for idx, r in enumerate(rows[start:start + self.page_size], start=1 + start):
-            id_, fname, ext, sizeb, storage_id, cdate, path, year, category = r
 
-            self.db_tree.insert("", "end", values=(
-                idx,                       # 👈 serial number
-                fname,
-                ext,
-                format_size(sizeb),
-                storage_id,
-                format_date(cdate),
-                path,
-                year if year else "",
-                category if category else ""
-            ), tags=(id_,))          # 👈 store real DB id safely
+            id_, fname, ext, sizeb, storage_id, cdate, path, year, category, status = r
+
+            # Metadata status dot
+            if status == "COMPLETE":
+                tag = "meta_complete"
+            elif status == "INCOMPLETE":
+                tag = "meta_incomplete"
+            else:
+                tag = "meta_missing"
+
+            self.db_tree.insert(
+                "",
+                "end",
+                values=(
+                    idx,
+                    fname,
+                    ext,
+                    format_size(sizeb),
+                    storage_id,
+                    format_date(cdate),
+                    path,
+                    year if year else "",
+                    category if category else ""
+                ),
+                tags=(id_, tag)   # ✔ id first, color tag second
+            )
 
     
     def auto_resize_columns(self, display_rows):
