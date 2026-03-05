@@ -13,33 +13,36 @@ import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
-
 # ------------------------------
 # Controlled Category Vocabulary
 # ------------------------------
 KNOWN_CATEGORIES = [
+    "Classic Porn, Sex Education",
     "Classic Porn, Incest",
     "Drama, Incest",
     "Incest, Thriller",
-    "Mystery",
-    "Crime",
-    "Asian",
-    "Incest",
+
+    "Classic Porn",
+    "Classic Erotica",
     "Newage Porn",
     "Newage Erotica",
-    "Classic Erotica",
     "Asian Erotica",
-    "Classic Porn",
-    "Classic Porn, Sex Education",
+
     "Incest",
-    "Thriller",
+    "Sex Education",
+
+    "Action",
+    "Adventure",
+    "Comedy",
+    "Crime",
     "Drama",
     "Horror",
-    "Comedy",
-    "Action",
+    "Mystery",
     "Romance",
     "Sci-Fi",
-    "Adventure",
+    "Thriller",
+
+    "Asian",
 ]
 
 
@@ -47,22 +50,76 @@ KNOWN_CATEGORIES = [
 # Public API
 # ------------------------------
 def scrape_movie(url, timeout=15):
-    """
-    Main entry point.
+    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+    r.raise_for_status()
 
-    Returns:
-        {
-            "name": str,
-            "year": str,
-            "category": str,
-            "description": str,
-            "images": list[str]
-        }
+    soup = BeautifulSoup(r.text, "html.parser")
 
-    Raises:
-        Exception if page cannot be loaded.
-    """
+    # -------- Name + Year --------
+    slug = urlparse(url).path.strip("/")
+    m = re.search(r"(.+)-(\d{4})$", slug)
+    name = m.group(1).replace("-", " ").title() if m else slug.replace("-", " ").title()
+    year = m.group(2) if m else ""
 
+    # -------- Category (more reliable) --------
+    category = ""
+    meta = soup.select_one(".entry-meta")
+
+    if meta:
+        parts = [p.strip() for p in meta.get_text("|", strip=True).split("|")]
+
+        if len(parts) >= 2:
+            category = parts[1]
+
+    # -------- Article Content --------
+    content = soup.select_one(".entry-content")
+
+    # -------- Description --------
+    description = ""
+
+    if content:
+        for p in content.find_all("p"):
+            txt = p.get_text(" ", strip=True)
+
+            if txt.lower().startswith("description"):
+                description = txt.split(":",1)[-1].strip()
+                break
+
+        # fallback: longest paragraph
+        if not description:
+            paragraphs = [p.get_text(" ", strip=True) for p in content.find_all("p")]
+            if paragraphs:
+                description = max(paragraphs, key=len)
+
+    # -------- Cover Images --------
+    images = []
+
+    if content:
+        for img in content.select("img[src]"):
+
+            src = img["src"]
+
+            if not src.lower().endswith((".jpg",".jpeg",".png")):
+                continue
+
+            src = re.sub(r"-\d+x\d+(?=\.(jpg|jpeg|png))","",src)
+
+            if any(x in src.lower() for x in ["logo","avatar","icon","banner","ads"]):
+                continue
+
+            if src not in images:
+                images.append(src)
+
+    images = images[:2]
+
+    return {
+        "name": name,
+        "year": year,
+        "category": category,
+        "description": description,
+        "images": images
+    }
+"""def scrape_movie(url, timeout=15):
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Referer": url
@@ -88,6 +145,7 @@ def scrape_movie(url, timeout=15):
         "description": description,
         "images": images
     }
+    """
 
 
 # ------------------------------

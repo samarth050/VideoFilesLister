@@ -167,15 +167,14 @@ WHERE
 """
 MOVIE_DETAILS_INSERT_MANUAL = """
 INSERT INTO MovieDetails
-(file_id, category, description, cover1_path, cover2_path, metadata_url)
-VALUES (?, ?, ?, ?, ?, ?)
+(file_id, category, description, cover1_path, cover2_path)
+VALUES (?, ?, ?, ?, ?)
 
 ON CONFLICT(file_id) DO UPDATE SET
     category = excluded.category,
     description = excluded.description,
     cover1_path = COALESCE(excluded.cover1_path, MovieDetails.cover1_path),
-    cover2_path = COALESCE(excluded.cover2_path, MovieDetails.cover2_path),
-    metadata_url = COALESCE(excluded.metadata_url, MovieDetails.metadata_url)
+    cover2_path = COALESCE(excluded.cover2_path, MovieDetails.cover2_path)
 """
 FILES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS Files (
