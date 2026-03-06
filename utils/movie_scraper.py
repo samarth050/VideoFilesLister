@@ -61,15 +61,17 @@ def scrape_movie(url, timeout=15):
     name = m.group(1).replace("-", " ").title() if m else slug.replace("-", " ").title()
     year = m.group(2) if m else ""
 
-    # -------- Category (more reliable) --------
+    # -------- Category --------
     category = ""
     meta = soup.select_one(".entry-meta")
 
     if meta:
-        parts = [p.strip() for p in meta.get_text("|", strip=True).split("|")]
+        text = meta.get_text(" ", strip=True)
 
-        if len(parts) >= 2:
-            category = parts[1]
+        for cat in sorted(KNOWN_CATEGORIES, key=len, reverse=True):
+            if re.search(r"\b" + re.escape(cat) + r"\b", text, re.IGNORECASE):
+                category = cat
+                break
 
     # -------- Article Content --------
     content = soup.select_one(".entry-content")
