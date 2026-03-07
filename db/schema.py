@@ -34,10 +34,10 @@ SELECT
             THEN 'NO_METADATA'
 
         WHEN
-            (m.category IS NULL OR m.category='')
-         OR (m.description IS NULL OR m.description='')
-         OR (m.cover1_path IS NULL OR m.cover1_path='')
-         OR (m.cover2_path IS NULL OR m.cover2_path='')
+            (COALESCE(m.category, f.category) IS NULL OR COALESCE(m.category, f.category) = '')
+         OR (m.description IS NULL OR m.description = '')
+         OR (m.cover1_path IS NULL OR m.cover1_path = '')
+         OR (m.cover2_path IS NULL OR m.cover2_path = '')
             THEN 'INCOMPLETE'
 
         ELSE 'COMPLETE'
@@ -45,8 +45,23 @@ SELECT
 
 FROM Files f
 LEFT JOIN MovieDetails m
-ON f.id = m.file_id
+ON f.id = m.file_id;
 """
+SELECT_METADATA_VIEW ="""
+ SELECT
+ id,
+ file_name,
+ extension,
+ size_bytes,
+ storage_id,
+ creation_date,
+ full_path,
+ year,
+ category,
+ metadata_status
+ FROM MetadataStatusView
+"""
+
 METADATA_STATUS_STATS = """
 SELECT
 COUNT(*) AS total_files,

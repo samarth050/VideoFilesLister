@@ -70,6 +70,7 @@ from db.schema import (
     SELECT_MOVIE_DETAIL_VIEW,
     METADATA_STATUS_STATS,
     SELECT_MOVIE_METADATA_FULL,
+    SELECT_METADATA_VIEW,
     CREATE_METADATA_VIEW,
     SELECT_MOVIE_METADATA,
     UPDATE_FILES_CATEGORY,
@@ -1031,6 +1032,27 @@ class FileListerApp:
                 f"{upgraded} covers upgraded successfully."
             )
             self.status_var.set("Bulk cover upgrade completed.")
+
+    def repair_metadata_integrity(self):
+
+        conn = self.get_connection()
+        cur = conn.cursor()
+
+        cur.execute("SELECT file_id, cover1_path, cover2_path FROM MovieDetails")
+        rows = cur.fetchall()
+
+        for fid, c1, c2 in rows:
+            new_c1 = c1 if (c1 and os.path.exists(c1)) else None
+            new_c2 = c2 if (c2 and os.path.exists(c2)) else None
+
+            if new_c1 != c1 or new_c2 != c2:
+                cur.execute(
+                    "UPDATE MovieDetails SET cover1_path=?, cover2_path=? WHERE file_id=?",
+                    (new_c1, new_c2, fid)
+                )
+
+        conn.commit()
+        conn.close()
 
     def save_metadata(self):
         if not self.selected_file_id:
@@ -4200,7 +4222,8 @@ class FileListerApp:
     def load_db_records(self):
         if not self.current_db_path:
             return
-
+        # 🔧 Repair broken cover paths before loading records
+        self.repair_metadata_integrity()
         try:
             conn = self.get_connection()
             cur = conn.cursor()
@@ -4208,25 +4231,12 @@ class FileListerApp:
             # Ensure metadata status view exists
             cur.execute(DROP_METADATA_VIEW)
             cur.execute(CREATE_METADATA_VIEW)
-
             selected_sid = self.selected_storage_filter.get()
 
             meta_filter = getattr(self, "meta_filter_var", tk.StringVar(value="All")).get()
 
-            query = """
-            SELECT
-            id,
-            file_name,
-            extension,
-            size_bytes,
-            storage_id,
-            creation_date,
-            full_path,
-            year,
-            category,
-            metadata_status
-            FROM MetadataStatusView
-            """
+            query =SELECT_METADATA_VIEW
+
 
             params = []
 

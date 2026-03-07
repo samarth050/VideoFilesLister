@@ -14,6 +14,18 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 
 # ------------------------------
+# Persistent HTTP session
+# ------------------------------
+
+SESSION = requests.Session()
+
+SESSION.headers.update({
+    "User-Agent": "Mozilla/5.0",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Connection": "keep-alive"
+})
+
+# ------------------------------
 # Controlled Category Vocabulary
 # ------------------------------
 KNOWN_CATEGORIES = [
@@ -50,7 +62,7 @@ KNOWN_CATEGORIES = [
 # Public API
 # ------------------------------
 def scrape_movie(url, timeout=15):
-    r = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=timeout)
+    r = SESSION.get(url, timeout=timeout)
     r.raise_for_status()
 
     soup = BeautifulSoup(r.text, "html.parser")
@@ -99,7 +111,9 @@ def scrape_movie(url, timeout=15):
     if content:
         for img in content.select("img[src]"):
 
-            src = img["src"]
+            src = img.get("src")
+            if not src:
+                continue
 
             if not src.lower().endswith((".jpg",".jpeg",".png")):
                 continue
@@ -109,10 +123,17 @@ def scrape_movie(url, timeout=15):
             if any(x in src.lower() for x in ["logo","avatar","icon","banner","ads"]):
                 continue
 
-            if src not in images:
-                images.append(src)
+            images.append(src)
 
-    images = images[:2]
+    # remove duplicates
+    seen=set()
+    unique=[]
+    for i in images:
+        if i not in seen:
+            unique.append(i)
+            seen.add(i)
+
+    images = unique[:2]
 
     return {
         "name": name,
@@ -175,7 +196,7 @@ def scrape_category_urls(category_url, timeout=15):
         "User-Agent": "Mozilla/5.0"
     }
 
-    response = requests.get(category_url, headers=headers, timeout=timeout)
+    response = SESSION.get(category_url, timeout=timeout)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
