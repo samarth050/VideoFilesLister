@@ -1433,6 +1433,8 @@ class FileListerApp:
 
         if selected_tab == "Statistics":
             self.update_db_statistics()
+            self.update_storage_statistics()
+            self.update_category_statistics()
             self.update_status_bar_db_info()
             self.draw_extension_pie_chart()
 
@@ -2010,7 +2012,36 @@ class FileListerApp:
         except:
             return False
 
-    
+    def update_category_statistics(self):
+
+        if not self.current_db_path:
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            cur.execute("""
+                SELECT COALESCE(m.category,f.category) AS cat,
+                    COUNT(*)
+                FROM Files f
+                LEFT JOIN MovieDetails m
+                ON f.id = m.file_id
+                WHERE cat IS NOT NULL AND TRIM(cat) != ''
+                GROUP BY cat
+                ORDER BY COUNT(*) DESC
+            """)
+
+            rows = cur.fetchall()
+            conn.close()
+
+            self.category_tree.delete(*self.category_tree.get_children())
+
+            for cat, cnt in rows:
+                self.category_tree.insert("", "end", values=(cat, cnt))
+
+        except Exception as e:
+            print("Category stats error:", e)   
 
     def setup_stats_tab(self, parent):
         """
@@ -2083,7 +2114,7 @@ class FileListerApp:
             storage_frame,
             columns=("Storage", "Files", "Total Size"),
             show="headings",
-            height=6
+            height=4
         )
         self.db_storage_tree.pack(fill="x", padx=6, pady=4)
 
@@ -2094,7 +2125,25 @@ class FileListerApp:
         self.db_storage_tree.column("Storage", width=200, anchor="w")
         self.db_storage_tree.column("Files", width=100, anchor="e")
         self.db_storage_tree.column("Total Size", width=140, anchor="e")
-        
+        # ---------------- CATEGORY STATISTICS ----------------
+        category_frame = ttk.LabelFrame(parent, text="Category Distribution")
+        category_frame.pack(fill="x", padx=8, pady=6)
+
+        self.category_tree = ttk.Treeview(
+            category_frame,
+            columns=("Category", "Movies"),
+            show="headings",
+            height=6
+        )
+
+        self.category_tree.pack(fill="x", padx=6, pady=4)
+
+        self.category_tree.heading("Category", text="Category")
+        self.category_tree.heading("Movies", text="Movie Count")
+
+        self.category_tree.column("Category", width=240, anchor="w")
+        self.category_tree.column("Movies", width=120, anchor="e")        
+
         tk.Button(parent, text="Export Statistics to Excel",
           command=self.export_db_statistics_to_excel).pack(anchor="w", padx=6, pady=4)
 
