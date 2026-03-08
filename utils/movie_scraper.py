@@ -32,12 +32,18 @@ KNOWN_CATEGORIES = [
     "Classic Porn, Sex Education",
     "Classic Porn, Incest",
     "Drama, Incest",
+    "Incest, Newage Erotica",
+    "Incest, Newage Porn",
     "Incest, Thriller",
+    "Incest, Mystery",
+    "Incest, Romance",
 
     "Classic Porn",
+    "Classic Erotica, Incest",
     "Classic Erotica",
     "Newage Porn",
     "Newage Erotica",
+    "Asian Erotica, Incest",
     "Asian Erotica",
 
     "Incest",
@@ -46,14 +52,16 @@ KNOWN_CATEGORIES = [
     "Action",
     "Adventure",
     "Comedy",
+    "Crime, Incest",
     "Crime",
     "Drama",
+    "Horror, Incest",
     "Horror",
     "Mystery",
     "Romance",
     "Sci-Fi",
     "Thriller",
-
+    "Asian, Incest",
     "Asian",
 ]
 
