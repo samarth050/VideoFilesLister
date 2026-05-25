@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environments
+venv/
+env/
+.venv/
+
+# VS Code
+.vscode/
+
+# JetBrains
+.idea/
+
+# Build folders
+build/
+dist/
+
+# Data Files
+covers/
+
+# PyInstaller
+*.spec
+
+# SQLite temporary files
+*.db-wal
+*.db-shm
+*.db-journal
+
+# Logs
+*.log
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Covers cache / thumbnails
+covers/cache/
+
+# Runtime exports
+exports/
+temp/
+tmp/
+
+# Large media files (optional)
+*.mp4
+*.mkv
+*.avi
+*.jpg
+*.png
+
+
+# Database backups (optional)
+*.bak
+
+# Ignore local config
+config.local.json
+
+# Ignore generated EXE
+*.exe
+
+# Ignore Python packaging
+*.egg-info/
+.eggs/
+
+# Ignore test cache
+.pytest_cache/
+
+# Ignore notebook checkpoints
+.ipynb_checkpoints/
