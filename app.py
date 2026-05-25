@@ -1003,7 +1003,7 @@ class FileListerApp:
         except Exception as e:
             print("Image load failed:", e)
 
-    def is_low_resolution(image_path, min_height=600):
+    def is_low_resolution(self,image_path, min_height=600):
         try:
             from PIL import Image
             image_path = self.resolve_cover_path(image_path)
