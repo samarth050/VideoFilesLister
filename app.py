@@ -1529,6 +1529,7 @@ class FileListerApp:
         db_tab = ttk.Frame(self.notebook)
         self.gallery_tab = ttk.Frame(self.notebook)      # ✅ store reference
         self.movie_details_tab = ttk.Frame(self.notebook)  # ✅ store reference
+        self.update_tab = ttk.Frame(self.notebook)
         dup_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(main_tab, text="Files List")
@@ -1536,6 +1537,7 @@ class FileListerApp:
         self.notebook.add(db_tab, text="SQLite Viewer")
         self.notebook.add(self.gallery_tab, text="Gallery")
         self.notebook.add(self.movie_details_tab, text="Movie Details")
+        self.notebook.add(self.update_tab, text="Update")
         self.notebook.add(dup_tab, text="Duplicates")
 
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
@@ -1544,6 +1546,7 @@ class FileListerApp:
         self.setup_stats_tab(stats_tab)
         self.setup_db_viewer_tab(db_tab)
         self.setup_movie_details_tab(self.movie_details_tab)
+        self.setup_update_tab(self.update_tab)
         self.setup_duplicates_tab(dup_tab)
 
         self.build_gallery_ui()   # ✅ initialize gallery UI
@@ -1570,6 +1573,11 @@ class FileListerApp:
             if self.selected_file_id:
                 self.load_movie_detail_view(self.selected_file_id)
                 self.load_movie_metadata(self.selected_file_id)
+
+        elif selected_tab == "Update":
+            # Populate update form for currently selected DB record
+            if self.selected_file_id:
+                self.populate_update_form(self.selected_file_id)
 
     def reset_scan(self):
         """Clear scanned file results and reset UI"""
@@ -3167,6 +3175,31 @@ class FileListerApp:
         else:
             self.db_category_var.set("All")
 
+    def load_year_dropdown(self):
+        if not self.current_db_path:
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT DISTINCT year FROM Files WHERE year IS NOT NULL ORDER BY year DESC")
+            years = [r[0] for r in cur.fetchall() if r[0]]
+            conn.close()
+        except Exception:
+            years = []
+
+        # convert to strings
+        years = [str(int(y)) for y in years]
+
+        values = ["All"] + years
+
+        current = self.db_year_var.get() if hasattr(self, "db_year_var") else "All"
+        self.db_year_combo["values"] = values
+        if current in values:
+            self.db_year_var.set(current)
+        else:
+            self.db_year_var.set("All")
+
     def load_storage_ids_from_db(self):
         if not self.current_db_path or not os.path.exists(self.current_db_path):
             return
@@ -3398,6 +3431,15 @@ class FileListerApp:
         )
         self.db_category_combo.pack(side="left", padx=4)
         self.db_category_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
+
+        tk.Label(top, text="Year:").pack(side="left", padx=(8,0))
+        self.db_year_var = tk.StringVar(value="All")
+        self.db_year_combo = ttk.Combobox(
+            top, textvariable=self.db_year_var,
+            state="readonly", width=10
+        )
+        self.db_year_combo.pack(side="left", padx=4)
+        self.db_year_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
 
         tk.Label(top, text="Metadata:").pack(side="left", padx=(8,0))
 
@@ -3849,6 +3891,128 @@ class FileListerApp:
             # 🔥 Re-enable manual category editing
             self.category_combo.configure(state="normal")
             self.status_var.set("Metadata refreshed successfully.")
+
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+
+    # ----------------------
+    # Update Tab (Manual)
+    # ----------------------
+    def setup_update_tab(self, parent):
+        parent.columnconfigure(1, weight=1)
+
+        ttk.Label(parent, text="Update Record", font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=8, pady=(8,4))
+
+        frame = ttk.Frame(parent)
+        frame.pack(fill="x", padx=8, pady=6)
+
+        ttk.Label(frame, text="File Name:").grid(row=0, column=0, sticky="w", pady=4)
+        self.update_name_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.update_name_var, width=60).grid(row=0, column=1, sticky="ew", padx=6)
+
+        ttk.Label(frame, text="Year:").grid(row=1, column=0, sticky="w", pady=4)
+        self.update_year_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.update_year_var, width=20).grid(row=1, column=1, sticky="w", padx=6)
+
+        ttk.Label(frame, text="Category:").grid(row=2, column=0, sticky="w", pady=4)
+        self.update_category_var = tk.StringVar()
+        self.update_category_combo = ttk.Combobox(frame, textvariable=self.update_category_var, values=self.get_all_categories(), state="normal", width=40)
+        self.update_category_combo.grid(row=2, column=1, sticky="w", padx=6)
+
+        ttk.Label(frame, text="Path:").grid(row=3, column=0, sticky="w", pady=4)
+        self.update_path_var = tk.StringVar()
+        ttk.Entry(frame, textvariable=self.update_path_var, width=60).grid(row=3, column=1, sticky="ew", padx=6)
+        ttk.Button(frame, text="Browse", command=self.browse_update_path).grid(row=3, column=2, padx=6)
+
+        btn_frame = ttk.Frame(parent)
+        btn_frame.pack(fill="x", padx=8, pady=8)
+
+        ttk.Button(btn_frame, text="Save Changes", command=self.save_update_record).pack(side="left")
+        ttk.Button(btn_frame, text="Clear", command=self.clear_update_form).pack(side="left", padx=6)
+
+    def browse_update_path(self):
+        path = filedialog.askopenfilename(title="Select file path")
+        if path:
+            self.update_path_var.set(path)
+
+    def clear_update_form(self):
+        self.update_name_var.set("")
+        self.update_year_var.set("")
+        self.update_category_var.set("")
+        self.update_path_var.set("")
+
+    def populate_update_form(self, file_id):
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute(SELECT_MOVIE_DETAIL_VIEW, (file_id,))
+            row = cur.fetchone()
+            conn.close()
+
+            if not row:
+                self.clear_update_form()
+                return
+
+            name, ext, year, storage, path, size_bytes, category, desc, cover1, cover2 = row
+
+            self.update_name_var.set(name or "")
+            self.update_year_var.set(str(year) if year else "")
+            self.update_category_var.set(category or "")
+            self.update_path_var.set(path or "")
+
+            # Refresh category choices
+            try:
+                cats = self.get_all_categories()
+                self.update_category_combo["values"] = cats
+            except:
+                pass
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load record: {e}")
+
+    def save_update_record(self):
+        if not self.selected_file_id:
+            messagebox.showwarning("No Selection", "Select a DB record first in the viewer.")
+            return
+
+        file_id = self.selected_file_id
+        name = self.update_name_var.get().strip()
+        year = self.update_year_var.get().strip()
+        category = self.update_category_var.get().strip()
+        path = self.update_path_var.get().strip()
+
+        if not name:
+            messagebox.showwarning("Validation", "File Name cannot be empty.")
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            # Update Files table
+            cur.execute("""
+                UPDATE Files
+                SET file_name = ?, year = ?, category = ?, full_path = ?
+                WHERE id = ?
+            """, (name, int(year) if year else None, category if category else None, path if path else None, file_id))
+
+            # Update or insert MovieDetails category if present
+            cur.execute("UPDATE MovieDetails SET category = ? WHERE file_id = ?", (category if category else None, file_id))
+            if cur.rowcount == 0 and category:
+                # Insert minimal MovieDetails row
+                try:
+                    cur.execute(MOVIE_DETAILS_INSERT_MANUAL, (file_id, category, "", None, None))
+                except Exception:
+                    pass
+
+            conn.commit()
+            conn.close()
+
+            messagebox.showinfo("Saved", "Record updated successfully.")
+
+            # Refresh UI
+            self.refresh_ui_after_db_update(file_id)
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
@@ -4416,6 +4580,7 @@ class FileListerApp:
         self.update_db_statistics()
         self.update_status_bar_db_info()
         self.load_category_dropdown()
+        self.load_year_dropdown()
         # Update metadata statistics
         self.update_metadata_status_summary()
         # ✅ refresh Storage ID dropdown
@@ -4471,15 +4636,45 @@ class FileListerApp:
     def filter_db_records(self):
         q = self.db_search_var.get().lower().strip() if hasattr(self, "db_search_var") else ""
         selected_cat = self.db_category_var.get() if hasattr(self, "db_category_var") else "All"
+        selected_year = self.db_year_var.get() if hasattr(self, "db_year_var") else "All"
 
         rows = list(self.db_records_cache)
 
         # 🔍 text search filter
         if q:
-            rows = [
-                r for r in rows
-                if any(q in (str(x).lower() if x is not None else "") for x in r)
-            ]
+            # Normalize query into alphanumeric tokens
+            q_tokens = [re.sub(r'[^0-9a-z]', '', t) for t in re.findall(r"\w+", q.lower()) if t]
+
+            def row_matches(r):
+                # Combine several text fields to search: file_name, full_path, category, extension
+                parts = []
+                try:
+                    parts.append(str(r[1]))
+                except Exception:
+                    pass
+                try:
+                    parts.append(str(r[6]))
+                except Exception:
+                    pass
+                try:
+                    parts.append(str(r[8] or ""))
+                except Exception:
+                    pass
+                try:
+                    parts.append(str(r[2] or ""))
+                except Exception:
+                    pass
+
+                combined = " ".join([p for p in parts if p])
+                norm = re.sub(r'[^0-9a-z]', '', combined.lower())
+
+                # All tokens must appear in normalized combined string (order not required)
+                for t in q_tokens:
+                    if t and t not in norm:
+                        return False
+                return True
+
+            rows = [r for r in rows if row_matches(r)]
 
         # 🏷 category filter
         if selected_cat and selected_cat != "All":
@@ -4487,6 +4682,16 @@ class FileListerApp:
                 rows = [r for r in rows if not r[8]]
             else:
                 rows = [r for r in rows if r[8] == selected_cat]
+
+        # 🗓 year filter
+        if selected_year and selected_year != "All":
+            def year_match(val):
+                try:
+                    return str(int(val)) == str(selected_year)
+                except Exception:
+                    return False
+
+            rows = [r for r in rows if year_match(r[7])]
 
         self.all_filtered_rows = rows
 
