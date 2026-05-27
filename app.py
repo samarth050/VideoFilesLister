@@ -3419,8 +3419,14 @@ class FileListerApp:
           command=self.upgrade_existing_covers).pack(side="left", padx=6)        
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
-        tk.Entry(top, textvariable=self.db_search_var, width=40).pack(side="left", padx=4)
+        self.db_search_entry = tk.Entry(top, textvariable=self.db_search_var, width=40)
+        self.db_search_entry.pack(side="left", padx=4)
         self.db_search_var.trace_add("write", lambda *a: self.filter_db_records())
+        self.create_db_search_context_menu()
+        self.db_search_entry.bind("<Button-3>", self._show_db_search_menu)
+        self.db_search_entry.bind("<Control-Button-1>", self._show_db_search_menu)
+        self.db_search_entry.bind("<Control-v>", self._paste_db_search_event)
+        self.db_search_entry.bind("<Control-V>", self._paste_db_search_event)
 
         tk.Label(top, text="Category:").pack(side="left", padx=(8,0))
 
@@ -3461,6 +3467,9 @@ class FileListerApp:
         e = tk.Entry(top, textvariable=self.page_size_var, width=6)
         e.pack(side="left", padx=4)
         e.bind("<Return>", lambda ev: self.apply_page_size())
+
+        tk.Button(top, text="Reset", width=12,
+                command=self.reset_db_viewer_filters).pack(side="left", padx=4)
 
         tk.Button(top, text="Export to Excel", width=16,
                 command=self.export_db_to_excel).pack(side="right", padx=6)
@@ -3704,6 +3713,56 @@ class FileListerApp:
         try:
             self.root.clipboard_clear()
             self.root.clipboard_append(self.category_url_var.get())
+        except:
+            pass
+
+
+    def _cut_category_url(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.category_url_var.get())
+            self.category_url_var.set("")
+        except:
+            pass
+
+
+    def create_db_search_context_menu(self):
+        self.db_search_menu = tk.Menu(self.root, tearoff=0)
+        self.db_search_menu.add_command(label="Paste", command=self._paste_db_search)
+        self.db_search_menu.add_command(label="Copy", command=self._copy_db_search)
+        self.db_search_menu.add_command(label="Cut", command=self._cut_db_search)
+        self.db_search_menu.add_separator()
+        self.db_search_menu.add_command(label="Clear", command=lambda: self.db_search_var.set(""))
+
+    def _show_db_search_menu(self, event):
+        try:
+            self.db_search_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.db_search_menu.grab_release()
+
+    def _paste_db_search(self):
+        try:
+            clipboard = self.root.clipboard_get()
+            self.db_search_var.set(clipboard.strip())
+        except:
+            pass
+
+    def _paste_db_search_event(self, event):
+        self._paste_db_search()
+        return "break"
+
+    def _copy_db_search(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.db_search_var.get())
+        except:
+            pass
+
+    def _cut_db_search(self):
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(self.db_search_var.get())
+            self.db_search_var.set("")
         except:
             pass
 
@@ -4704,7 +4763,7 @@ class FileListerApp:
     def show_db_page(self, page_num):
         if not self.all_filtered_rows:
             self.refresh_db_tree([])
-            self.page_label.config(text="Page 0 / 0")
+            self.page_label.config(text="Page 0 / 0 | Total: 0 records")
             return
 
         if page_num < 0:
@@ -4721,7 +4780,8 @@ class FileListerApp:
         # ✅ PASS FULL LIST (not sliced)
         self.refresh_db_tree(self.all_filtered_rows)
 
-        self.page_label.config(text=f"Page {self.current_page+1} / {self.total_pages}")
+        total_records = len(self.all_filtered_rows)
+        self.page_label.config(text=f"Page {self.current_page+1} / {self.total_pages} | Total: {total_records} records")
 
 
     def first_db_page(self):
@@ -4752,6 +4812,31 @@ class FileListerApp:
             total = len(self.all_filtered_rows)
             self.total_pages = (total-1)//self.page_size + 1 if total > 0 else 1
             self.current_page = 0
+            self.show_db_page(0)
+        except Exception:
+            messagebox.showwarning("Invalid Page Size", "Enter a positive integer for page size.")
+
+    def reset_db_viewer_filters(self):
+        if hasattr(self, "db_search_var"):
+            self.db_search_var.set("")
+        if hasattr(self, "db_category_var"):
+            self.db_category_var.set("All")
+        if hasattr(self, "db_year_var"):
+            self.db_year_var.set("All")
+        if hasattr(self, "meta_filter_var"):
+            self.meta_filter_var.set("All")
+        if hasattr(self, "selected_storage_filter"):
+            self.selected_storage_filter.set("ALL")
+
+        self.load_db_records()
+
+        try:
+            self.db_tree.selection_remove(self.db_tree.selection())
+        except Exception:
+            try:
+                self.db_tree.selection_set(())
+            except Exception:
+                pass
             self.show_db_page(0)
         except Exception:
             messagebox.showerror("Error", "Invalid page size")
