@@ -110,6 +110,21 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
 
         return results
 
+
+def normalize_path_for_compare(path):
+        """Normalize path for comparison while ignoring the drive letter."""
+        if not path:
+            return ""
+
+        drive, rest = os.path.splitdrive(path)
+        candidate = rest if rest else path
+        return os.path.normcase(os.path.normpath(candidate))
+
+
+def paths_equal_ignore_drive(path1, path2):
+        return normalize_path_for_compare(path1) == normalize_path_for_compare(path2)
+
+
 def detect_storage_id_from_path(path):
         try:
             drive, _ = os.path.splitdrive(path)

@@ -99,6 +99,7 @@ from db.database import init_db, ensure_global_unique_index
 from scanner.scanner import (
     get_files_info,
     detect_storage_id_from_path,
+    paths_equal_ignore_drive,
 )
 
 from duplicates.duplicate_analyzer import analyze_duplicates
@@ -1831,7 +1832,7 @@ class FileListerApp:
                 db_id, db_size, db_path, db_sid = row
 
                 if db_sid == current_sid:
-                    if os.path.normcase(db_path) != os.path.normcase(f["full_path"]):
+                    if not paths_equal_ignore_drive(db_path, f["full_path"]):
                         reason = "Movie moved (update path/storage)"
                         unmatched.append((f, reason, db_id))
                     else:
@@ -2067,7 +2068,7 @@ class FileListerApp:
                     db_id, db_sid, db_path = row
 
                     if db_sid == storage_id:
-                        if os.path.normcase(db_path) != os.path.normcase(full_path):
+                        if not paths_equal_ignore_drive(db_path, full_path):
                             # 🔄 moved movie
                             cur.execute(UPDATE_FILE_MOVE, (
                                 storage_id,
@@ -3031,7 +3032,7 @@ class FileListerApp:
                     db_id, db_storage, db_path_existing = row
 
                     if db_storage == storage_id:
-                        if db_path_existing != full_path:
+                        if not paths_equal_ignore_drive(db_path_existing, full_path):
                             # 🔄 Movie moved
                             cur.execute(UPDATE_FILE_MOVE, (
                                 storage_id,
