@@ -3619,6 +3619,9 @@ class FileListerApp:
 
         self.description_text = tk.Text(form_frame, height=4, width=50)
         self.description_text.grid(row=3, column=1, sticky="nsew", pady=(6, 0))
+        self.create_description_context_menu()
+        self.description_text.bind("<Button-3>", self._show_description_menu)
+        self.description_text.bind("<Control-Button-1>", self._show_description_menu)
 
         # Cover 1
         ttk.Label(form_frame, text="Cover 1:").grid(row=4, column=0, sticky="w", pady=(6, 0))
@@ -3702,6 +3705,48 @@ class FileListerApp:
             label="Clear",
             command=lambda: self.category_url_var.set("")
         )
+
+    def create_description_context_menu(self):
+        self.description_menu = tk.Menu(self.root, tearoff=0)
+        self.description_menu.add_command(label="Paste", command=self._paste_description)
+        self.description_menu.add_command(label="Copy", command=self._copy_description)
+        self.description_menu.add_command(label="Cut", command=self._cut_description)
+        self.description_menu.add_separator()
+        self.description_menu.add_command(label="Clear", command=self._clear_description)
+
+    def _show_description_menu(self, event):
+        try:
+            self.description_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            self.description_menu.grab_release()
+
+    def _paste_description(self):
+        try:
+            clipboard = self.root.clipboard_get()
+            self.description_text.insert(tk.INSERT, clipboard)
+        except:
+            pass
+
+    def _copy_description(self):
+        try:
+            selection = self.description_text.get("sel.first", "sel.last")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selection)
+        except tk.TclError:
+            pass
+
+    def _cut_description(self):
+        try:
+            selection = self.description_text.get("sel.first", "sel.last")
+            self.root.clipboard_clear()
+            self.root.clipboard_append(selection)
+            self.description_text.delete("sel.first", "sel.last")
+        except tk.TclError:
+            pass
+
+    def _clear_description(self):
+        self.description_text.delete("1.0", tk.END)
+
     def _paste_category_url(self):
         try:
             clipboard = self.root.clipboard_get()
