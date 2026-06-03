@@ -1161,6 +1161,7 @@ class FileListerApp:
             return
 
         category = self.category_var.get().strip()
+        year_text = self.year_var.get().strip()
         description = self.description_text.get("1.0", tk.END).strip()
         file_id = self.selected_file_id
 
@@ -1172,6 +1173,15 @@ class FileListerApp:
         if not category:
             messagebox.showwarning("Category Required", "Select category.")
             return
+
+        if year_text:
+            try:
+                year_value = int(year_text)
+            except ValueError:
+                messagebox.showwarning("Invalid Year", "Enter a numeric year.")
+                return
+        else:
+            year_value = None
 
         if not description:
             messagebox.showwarning("Description Required", "Enter description.")
@@ -1214,8 +1224,9 @@ class FileListerApp:
                 )
             )
 
-            # Sync Files table category (existing)
+            # Sync Files table category and year
             cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
+            cur.execute("UPDATE Files SET year=? WHERE id=?", (year_value, file_id))
 
             conn.commit()
             conn.close()
@@ -3237,6 +3248,8 @@ class FileListerApp:
 
     def clear_metadata_panel(self):
         self.category_var.set("")
+        if hasattr(self, "year_var"):
+            self.year_var.set("")
         self.description_text.delete("1.0", tk.END)
 
         # Clear metadata URL field (UI only)
@@ -3262,9 +3275,14 @@ class FileListerApp:
             cur = conn.cursor()
 
             cur.execute("""
-                SELECT category, description, cover1_path, cover2_path
-                FROM MovieDetails
-                WHERE file_id=?
+                SELECT f.year,
+                       m.category,
+                       m.description,
+                       m.cover1_path,
+                       m.cover2_path
+                FROM Files f
+                LEFT JOIN MovieDetails m ON f.id = m.file_id
+                WHERE f.id=?
             """, (file_id,))
 
             row = cur.fetchone()
@@ -3276,10 +3294,11 @@ class FileListerApp:
             if not row:
                 return  # No metadata stored yet
 
-            category, description, cover1_path, cover2_path = row
+            year, category, description, cover1_path, cover2_path = row
 
             # Load text
             self.category_var.set(category or "")
+            self.year_var.set(str(year) if year else "")
 
             self.description_text.delete("1.0", tk.END)
             self.description_text.insert("1.0", description or "")
@@ -3573,7 +3592,7 @@ class FileListerApp:
         form_frame.grid(row=0, column=0, sticky="nsew", padx=5, pady=5)
 
         form_frame.columnconfigure(1, weight=1)
-        form_frame.rowconfigure(3, weight=1)  # description row expands
+        form_frame.rowconfigure(4, weight=1)  # description row expands
 
         # Metadata URL
         ttk.Label(form_frame, text="Metadata URL:").grid(row=0, column=0, sticky="w")
@@ -3602,8 +3621,13 @@ class FileListerApp:
         ttk.Button(btn_frame, text="⚡ Auto Update",
                 command=self.auto_update_by_url).pack(side="left", padx=4)
 
+        # Year
+        ttk.Label(form_frame, text="Year:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        self.year_var = tk.StringVar()
+        ttk.Entry(form_frame, textvariable=self.year_var, width=12).grid(row=2, column=1, sticky="w", pady=(6, 0))
+
         # Category
-        ttk.Label(form_frame, text="Category:").grid(row=2, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(form_frame, text="Category:").grid(row=3, column=0, sticky="w", pady=(6, 0))
 
         self.category_combo = ttk.Combobox(
             form_frame,
@@ -3612,36 +3636,36 @@ class FileListerApp:
             state="normal",
             width=30
         )
-        self.category_combo.grid(row=2, column=1, sticky="w", pady=(6, 0))
+        self.category_combo.grid(row=3, column=1, sticky="w", pady=(6, 0))
 
         # Description
-        ttk.Label(form_frame, text="Description:").grid(row=3, column=0, sticky="nw", pady=(6, 0))
+        ttk.Label(form_frame, text="Description:").grid(row=4, column=0, sticky="nw", pady=(6, 0))
 
         self.description_text = tk.Text(form_frame, height=4, width=50)
-        self.description_text.grid(row=3, column=1, sticky="nsew", pady=(6, 0))
+        self.description_text.grid(row=4, column=1, sticky="nsew", pady=(6, 0))
         self.create_description_context_menu()
         self.description_text.bind("<Button-3>", self._show_description_menu)
         self.description_text.bind("<Control-Button-1>", self._show_description_menu)
 
         # Cover 1
-        ttk.Label(form_frame, text="Cover 1:").grid(row=4, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(form_frame, text="Cover 1:").grid(row=5, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(form_frame, textvariable=self.cover1_local_path,
-                width=50).grid(row=4, column=1, sticky="ew")
+            width=50).grid(row=5, column=1, sticky="ew")
 
         ttk.Button(form_frame, text="Browse",
-                command=self.browse_cover1).grid(row=4, column=2, padx=4)
+            command=self.browse_cover1).grid(row=5, column=2, padx=4)
 
         # Cover 2
-        ttk.Label(form_frame, text="Cover 2:").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        ttk.Label(form_frame, text="Cover 2:").grid(row=6, column=0, sticky="w", pady=(6, 0))
         ttk.Entry(form_frame, textvariable=self.cover2_local_path,
-                width=50).grid(row=5, column=1, sticky="ew")
+            width=50).grid(row=6, column=1, sticky="ew")
 
         ttk.Button(form_frame, text="Browse",
-                command=self.browse_cover2).grid(row=5, column=2, padx=4)
+            command=self.browse_cover2).grid(row=6, column=2, padx=4)
 
         # Save Button
         ttk.Button(form_frame, text="Save Metadata",
-                command=self.save_metadata).grid(row=6, column=1, pady=8, sticky="w")
+            command=self.save_metadata).grid(row=7, column=1, pady=8, sticky="w")
 
         # ---------------- RIGHT SIDE (IMAGES) ----------------
         # ---------------- COVER 1 ----------------
@@ -4022,7 +4046,13 @@ class FileListerApp:
 
         ttk.Label(frame, text="Category:").grid(row=2, column=0, sticky="w", pady=4)
         self.update_category_var = tk.StringVar()
-        self.update_category_combo = ttk.Combobox(frame, textvariable=self.update_category_var, values=self.get_all_categories(), state="normal", width=40)
+        self.update_category_combo = ttk.Combobox(
+            frame,
+            textvariable=self.update_category_var,
+            values=self.get_all_categories(),
+            state="normal",
+            width=40
+        )
         self.update_category_combo.grid(row=2, column=1, sticky="w", padx=6)
 
         ttk.Label(frame, text="Path:").grid(row=3, column=0, sticky="w", pady=4)
