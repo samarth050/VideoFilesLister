@@ -4064,6 +4064,7 @@ class FileListerApp:
         btn_frame.pack(fill="x", padx=8, pady=8)
 
         ttk.Button(btn_frame, text="Save Changes", command=self.save_update_record).pack(side="left")
+        ttk.Button(btn_frame, text="Delete Record", command=self.delete_update_record).pack(side="left", padx=6)
         ttk.Button(btn_frame, text="Clear", command=self.clear_update_form).pack(side="left", padx=6)
 
     def browse_update_path(self):
@@ -4151,6 +4152,78 @@ class FileListerApp:
 
         except Exception as e:
             messagebox.showerror("Error", str(e))
+
+    def delete_update_record(self):
+        """Delete the currently selected record with confirmation."""
+        if not self.selected_file_id:
+            messagebox.showwarning("No Selection", "Select a DB record first in the viewer.")
+            return
+
+        file_id = self.selected_file_id
+        file_name = self.update_name_var.get().strip()
+
+        if not file_name:
+            messagebox.showwarning("Error", "No record data loaded.")
+            return
+
+        # Ask for confirmation
+        if not messagebox.askyesno(
+            "Confirm Delete",
+            f"Are you sure you want to delete the record '{file_name}'?\n\n"
+            "This will also delete:\n"
+            "- Metadata record\n"
+            "- Cover images from the covers folder"
+        ):
+            return
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+
+            # Get cover paths from MovieDetails before deletion
+            cur.execute("SELECT cover1_path, cover2_path FROM MovieDetails WHERE file_id = ?", (file_id,))
+            cover_result = cur.fetchone()
+
+            cover_paths = []
+            if cover_result:
+                cover1_path, cover2_path = cover_result
+                if cover1_path:
+                    cover_paths.append(cover1_path)
+                if cover2_path:
+                    cover_paths.append(cover2_path)
+
+            # Delete from MovieDetails
+            cur.execute("DELETE FROM MovieDetails WHERE file_id = ?", (file_id,))
+
+            # Delete from Files
+            cur.execute(DELETE_FILE_BY_ID, (file_id,))
+
+            conn.commit()
+            conn.close()
+
+            # Delete cover images from disk
+            for cover_path in cover_paths:
+                try:
+                    resolved_path = self.resolve_cover_path(cover_path)
+                    if resolved_path and os.path.exists(resolved_path):
+                        os.remove(resolved_path)
+                except Exception as e:
+                    # Log error but continue with other files
+                    print(f"Warning: Could not delete cover file {cover_path}: {e}")
+
+            messagebox.showinfo("Deleted", f"Record '{file_name}' deleted successfully.")
+
+            # Clear the form
+            self.clear_update_form()
+            self.selected_file_id = None
+
+            # Refresh UI
+            self.load_db_records()
+            self.update_db_statistics()
+            self.update_status_bar_db_info()
+
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to delete record: {e}")
 
 
     def recreate_database(self):
