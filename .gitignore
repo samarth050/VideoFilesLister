@@ -21,6 +21,10 @@ dist/
 # Data Files
 covers/
 
+# Database File
+*.db
+VideoFiles.db
+
 # PyInstaller
 *.spec
 
@@ -57,6 +61,7 @@ tmp/
 
 # Ignore local config
 config.local.json
+app_settings.json
 
 # Ignore generated EXE
 *.exe

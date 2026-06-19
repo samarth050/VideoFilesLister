@@ -40,6 +40,7 @@ from tkinter import filedialog, messagebox, ttk, font as tkfont
 
 from PIL import Image, ImageTk
 import requests
+from typing import Any, Dict, Tuple, Optional
 
 
 def get_app_dir():
@@ -1564,8 +1565,17 @@ class FileListerApp:
         self.build_gallery_ui()   # ✅ initialize gallery UI
 
         self.status_var = tk.StringVar()
-        tk.Label(self.root, textvariable=self.status_var,
-                relief=tk.SUNKEN, bd=1, anchor="w").pack(fill="x", side="bottom")
+        self.db_loading_var = tk.StringVar()
+        self.db_loading_running = False
+        self.db_loading_dot_count = 0
+
+        status_frame = tk.Frame(self.root, relief=tk.SUNKEN, bd=1)
+        status_frame.pack(fill="x", side="bottom")
+
+        tk.Label(status_frame, textvariable=self.status_var,
+                anchor="w").pack(side="left", fill="x", expand=True)
+        tk.Label(status_frame, textvariable=self.db_loading_var,
+                anchor="e", width=14).pack(side="right")
 
     def on_tab_changed(self, event):
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
@@ -1576,6 +1586,18 @@ class FileListerApp:
             self.update_category_statistics()
             self.update_status_bar_db_info()
             self.draw_extension_pie_chart()
+
+        elif selected_tab == "SQLite Viewer":
+            if self.current_db_path:
+                if not os.path.exists(self.current_db_path):
+                    try:
+                        init_db(self.current_db_path, fresh=True)
+                    except Exception as e:
+                        messagebox.showerror("Database Error", f"Failed to create database:\n{e}")
+                        return
+                self.load_db_records()
+            else:
+                self.status_var.set("No SQLite database selected.")
 
         elif selected_tab == "Gallery":
             self.load_gallery_categories()
@@ -1691,7 +1713,7 @@ class FileListerApp:
 
         ys = ttk.Scrollbar(table_frame, orient="vertical", command=self.file_table.yview)
         xs = ttk.Scrollbar(table_frame, orient="horizontal", command=self.file_table.xview)
-        self.file_table.configure(yscroll=ys.set, xscroll=xs.set)
+        self.file_table.configure(yscrollcommand=ys.set, xscrollcommand=xs.set)
 
         self.file_table.pack(side="left", fill="both", expand=True)
         ys.pack(side="right", fill="y")
@@ -1918,7 +1940,7 @@ class FileListerApp:
         tree.column("Reason", width=320)
         tree.column("Full Path", width=520)
 
-        row_file_map = {}
+        row_file_map: Dict[str, Tuple[dict, str, Optional[int]]] = {}
 
         def populate(selected="ALL"):
             tree.delete(*tree.get_children())
@@ -1952,7 +1974,10 @@ class FileListerApp:
             sel = tree.selection()
             if not sel:
                 return
-            f, _, _ = row_file_map.get(sel[0])
+            val = row_file_map.get(sel[0])
+            if not val:
+                return
+            f, _, _ = val
             os.startfile(os.path.dirname(f["full_path"]))
 
         def apply_action():
@@ -2026,13 +2051,16 @@ class FileListerApp:
             item = tree.identify_row(event.y)
             if not item:
                 return
-            f, _, _ = row_file_map[item]
+            val = row_file_map.get(item)
+            if not val:
+                return
+            f, _, _ = val
             os.startfile(f["full_path"])
 
         tree.bind("<Double-1>", on_double_click)
 
 
-    def force_insert_selected_files(self, tree, row_file_map, parent_win):
+    def force_insert_selected_files(self, tree, row_file_map: Dict[str, Any], parent_win) -> None:
         selected = tree.selection()
 
         if not selected:
@@ -3429,14 +3457,24 @@ class FileListerApp:
         top = tk.Frame(parent)
         top.pack(fill="x", pady=6)
 
-        tk.Button(top, text="Recreate DB (Clean)",
-            command=self.recreate_database).pack(side="left", padx=6)
+        self.db_action_buttons = []
 
-        tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db).pack(side="left", padx=4)
-        tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)\
-            .pack(side="left", padx=6)
-        tk.Button(top, text="Upgrade Covers",
-          command=self.upgrade_existing_covers).pack(side="left", padx=6)        
+        btn = tk.Button(top, text="Recreate DB (Clean)", command=self.recreate_database)
+        btn.pack(side="left", padx=6)
+        self.db_action_buttons.append(btn)
+
+        btn = tk.Button(top, text="Open SQLite DB", command=self.open_sqlite_db)
+        btn.pack(side="left", padx=4)
+        self.db_action_buttons.append(btn)
+
+        btn = tk.Button(top, text="Verify DB vs Disk", command=self.verify_db_vs_disk)
+        btn.pack(side="left", padx=6)
+        self.db_action_buttons.append(btn)
+
+        btn = tk.Button(top, text="Upgrade Covers", command=self.upgrade_existing_covers)
+        btn.pack(side="left", padx=6)
+        self.db_action_buttons.append(btn)
+
         tk.Label(top, text="Search:").pack(side="left", padx=(8,0))
         self.db_search_var = tk.StringVar()
         self.db_search_entry = tk.Entry(top, textvariable=self.db_search_var, width=40)
@@ -3488,17 +3526,21 @@ class FileListerApp:
         e.pack(side="left", padx=4)
         e.bind("<Return>", lambda ev: self.apply_page_size())
 
-        tk.Button(top, text="Reset", width=12,
-                command=self.reset_db_viewer_filters).pack(side="left", padx=4)
+        btn = tk.Button(top, text="Reset", width=12, command=self.reset_db_viewer_filters)
+        btn.pack(side="left", padx=4)
+        self.db_action_buttons.append(btn)
 
-        tk.Button(top, text="Export to Excel", width=16,
-                command=self.export_db_to_excel).pack(side="right", padx=6)
+        btn = tk.Button(top, text="Export to Excel", width=16, command=self.export_db_to_excel)
+        btn.pack(side="right", padx=6)
+        self.db_action_buttons.append(btn)
 
-        tk.Button(top, text="Delete ALL", width=14,
-                command=self.delete_all_db_rows).pack(side="right", padx=6)
+        btn = tk.Button(top, text="Delete ALL", width=14, command=self.delete_all_db_rows)
+        btn.pack(side="right", padx=6)
+        self.db_action_buttons.append(btn)
 
-        tk.Button(top, text="Delete Selected", width=16,
-                command=self.delete_selected_db_rows).pack(side="right", padx=6)
+        btn = tk.Button(top, text="Delete Selected", width=16, command=self.delete_selected_db_rows)
+        btn.pack(side="right", padx=6)
+        self.db_action_buttons.append(btn)
         # -----------------------------
         # Metadata Status Summary Label
         # -----------------------------
@@ -3510,6 +3552,17 @@ class FileListerApp:
         )
         self.meta_status_label.pack(fill="x", padx=8, pady=2)        
 
+        self.db_viewer_controls = [
+            self.storage_filter_combo,
+            self.db_search_entry,
+            self.db_category_combo,
+            self.db_year_combo,
+            self.meta_filter_combo,
+            e,  # page size entry
+        ]
+
+        self.db_tree_controls = []
+
         cols = ("No", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
 
         frame = tk.Frame(parent)
@@ -3517,8 +3570,8 @@ class FileListerApp:
 
         # ✅ CREATE TREE FIRST
         self.db_tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
-    
         self.db_tree.bind("<<TreeviewSelect>>", self.on_db_row_select)
+        self.db_tree_controls = [self.db_tree]
 
 
         # ✅ HEADINGS + SORT
@@ -3833,15 +3886,6 @@ class FileListerApp:
             self.root.clipboard_clear()
             self.root.clipboard_append(self.db_search_var.get())
             self.db_search_var.set("")
-        except:
-            pass
-
-
-    def _cut_category_url(self):
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(self.category_url_var.get())
-            self.category_url_var.set("")
         except:
             pass
 
@@ -4728,9 +4772,67 @@ class FileListerApp:
     def load_db_records(self):
         if not self.current_db_path:
             return
-        # 🔧 Repair broken cover paths before loading records
-        self.repair_metadata_integrity()
+
+        if getattr(self, "db_load_in_progress", False):
+            return
+
+        self.db_load_in_progress = True
+        self.status_var.set("Loading database records...")
+        self._start_db_loading_indicator()
+
+        thread = threading.Thread(
+            target=self._load_db_records_worker,
+            daemon=True
+        )
+        thread.start()
+
+    def _start_db_loading_indicator(self):
+        self.db_loading_running = True
+        self.db_loading_dot_count = 0
+        self._update_db_loading_indicator()
+        self._set_db_viewer_enabled(False)
+
+    def _stop_db_loading_indicator(self):
+        self.db_loading_running = False
+        self.db_loading_var.set("")
+        self._set_db_viewer_enabled(True)
+
+    def _update_db_loading_indicator(self):
+        if not self.db_loading_running:
+            return
+
+        dots = "." * ((self.db_loading_dot_count % 3) + 1)
+        self.db_loading_var.set(f"Loading{dots}")
+        self.db_loading_dot_count += 1
+        self.root.after(400, self._update_db_loading_indicator)
+
+    def _set_db_viewer_enabled(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+
+        for widget in getattr(self, "db_viewer_controls", []):
+            try:
+                widget.configure(state=state)
+            except Exception:
+                pass
+
+        for button in getattr(self, "db_action_buttons", []):
+            try:
+                button.configure(state=state)
+            except Exception:
+                pass
+
+        for widget in getattr(self, "db_tree_controls", []):
+            try:
+                if enabled:
+                    widget.state(("!disabled",))
+                else:
+                    widget.state(("disabled",))
+            except Exception:
+                pass
+
+    def _load_db_records_worker(self):
         try:
+            self.repair_metadata_integrity()
             conn = self.get_connection()
             cur = conn.cursor()
 
@@ -4741,9 +4843,7 @@ class FileListerApp:
 
             meta_filter = getattr(self, "meta_filter_var", tk.StringVar(value="All")).get()
 
-            query =SELECT_METADATA_VIEW
-
-
+            query = SELECT_METADATA_VIEW
             params = []
 
             # Storage filter
@@ -4764,16 +4864,17 @@ class FileListerApp:
             query += " ORDER BY id DESC"
 
             cur.execute(query, params)
-
             rows = cur.fetchall()
-
             conn.close()
 
+            self.root.after(0, lambda: self._finish_load_db_records(rows))
         except Exception as e:
-            messagebox.showerror("Error", f"Failed reading DB: {e}")
-            return
+            self.root.after(0, lambda: self._load_db_records_error(e))
 
-        # Cache full dataset
+    def _finish_load_db_records(self, rows):
+        self.db_load_in_progress = False
+        self._stop_db_loading_indicator()
+
         self.db_records_cache = rows
         self.all_filtered_rows = list(rows)
 
@@ -4781,18 +4882,19 @@ class FileListerApp:
         self.total_pages = (total - 1) // self.page_size + 1 if total > 0 else 1
         self.current_page = 0
 
-        # Show first page
         self.show_db_page(0)
-
         self.status_var.set(f"Loaded {total} rows from {self.current_db_path}")
         self.update_db_statistics()
         self.update_status_bar_db_info()
         self.load_category_dropdown()
         self.load_year_dropdown()
-        # Update metadata statistics
         self.update_metadata_status_summary()
-        # ✅ refresh Storage ID dropdown
-        #self.load_storage_ids_from_db()
+
+    def _load_db_records_error(self, error):
+        self.db_load_in_progress = False
+        self._stop_db_loading_indicator()
+        messagebox.showerror("Error", f"Failed reading DB: {error}")
+        self.status_var.set("Failed to load database records.")
 
     def refresh_db_tree(self, rows):
 
