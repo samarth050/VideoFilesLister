@@ -220,6 +220,11 @@ class FileListerApp:
 
         self.db_records_cache = []
         self.all_filtered_rows = []
+        # DB load/cache tracking
+        self._db_loaded = False
+        self._db_last_path = None
+        self._db_last_mtime = None
+        self._db_needs_refresh = False
         self.selected_storage_filter = tk.StringVar(value="ALL")
         self.available_storage_ids = ["ALL"]
 
@@ -1595,7 +1600,29 @@ class FileListerApp:
                     except Exception as e:
                         messagebox.showerror("Database Error", f"Failed to create database:\n{e}")
                         return
-                self.load_db_records()
+                # Only reload DB when necessary: first run, DB path changed,
+                # DB file modified externally, or a refresh was requested.
+                should_load = False
+                if not getattr(self, "_db_loaded", False):
+                    should_load = True
+                elif self.current_db_path != getattr(self, "_db_last_path", None):
+                    should_load = True
+                else:
+                    try:
+                        cur_mtime = os.path.getmtime(self.current_db_path)
+                        if getattr(self, "_db_last_mtime", None) != cur_mtime:
+                            should_load = True
+                    except Exception:
+                        should_load = True
+
+                if getattr(self, "_db_needs_refresh", False):
+                    should_load = True
+
+                if should_load:
+                    self.load_db_records()
+                    self._db_needs_refresh = False
+                else:
+                    self.status_var.set(f"Using cached DB data ({os.path.basename(self.current_db_path)})")
             else:
                 self.status_var.set("No SQLite database selected.")
 
@@ -4889,6 +4916,16 @@ class FileListerApp:
         self.load_category_dropdown()
         self.load_year_dropdown()
         self.update_metadata_status_summary()
+        # Mark DB as loaded/cached and remember timestamp
+        try:
+            if self.current_db_path and os.path.exists(self.current_db_path):
+                self._db_last_mtime = os.path.getmtime(self.current_db_path)
+            else:
+                self._db_last_mtime = None
+        except Exception:
+            self._db_last_mtime = None
+        self._db_last_path = self.current_db_path
+        self._db_loaded = True
 
     def _load_db_records_error(self, error):
         self.db_load_in_progress = False
