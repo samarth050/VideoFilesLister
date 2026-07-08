@@ -227,6 +227,10 @@ class FileListerApp:
         self._db_needs_refresh = False
         self.selected_storage_filter = tk.StringVar(value="ALL")
         self.available_storage_ids = ["ALL"]
+        self.missing_online_url_var = tk.StringVar()
+        self.missing_online_search_var = tk.StringVar()
+        self.missing_online_rows = []
+        self._missing_online_sort_reverse = {}
 
         #self.current_page_rows = []
         self.page_size = 50
@@ -1169,6 +1173,7 @@ class FileListerApp:
         category = self.category_var.get().strip()
         year_text = self.year_var.get().strip()
         description = self.description_text.get("1.0", tk.END).strip()
+        metadata_url = self.meta_url_var.get().strip() if hasattr(self, "meta_url_var") else ""
         file_id = self.selected_file_id
 
         # 🔹 Manual cover paths (new)
@@ -1233,6 +1238,12 @@ class FileListerApp:
             # Sync Files table category and year
             cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
             cur.execute("UPDATE Files SET year=? WHERE id=?", (year_value, file_id))
+
+            if metadata_url:
+                cur.execute(
+                    "UPDATE MovieDetails SET metadata_url=? WHERE file_id=?",
+                    (metadata_url, file_id)
+                )
 
             conn.commit()
             conn.close()
@@ -1548,6 +1559,7 @@ class FileListerApp:
         self.gallery_tab = ttk.Frame(self.notebook)      # ✅ store reference
         self.movie_details_tab = ttk.Frame(self.notebook)  # ✅ store reference
         self.update_tab = ttk.Frame(self.notebook)
+        self.missing_online_tab = ttk.Frame(self.notebook)
         dup_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(main_tab, text="Files List")
@@ -1556,6 +1568,7 @@ class FileListerApp:
         self.notebook.add(self.gallery_tab, text="Gallery")
         self.notebook.add(self.movie_details_tab, text="Movie Details")
         self.notebook.add(self.update_tab, text="Update")
+        self.notebook.add(self.missing_online_tab, text="Missing Online")
         self.notebook.add(dup_tab, text="Duplicates")
 
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
@@ -1565,6 +1578,7 @@ class FileListerApp:
         self.setup_db_viewer_tab(db_tab)
         self.setup_movie_details_tab(self.movie_details_tab)
         self.setup_update_tab(self.update_tab)
+        self.setup_missing_online_tab(self.missing_online_tab)
         self.setup_duplicates_tab(dup_tab)
 
         self.build_gallery_ui()   # ✅ initialize gallery UI
@@ -1639,6 +1653,12 @@ class FileListerApp:
             # Populate update form for currently selected DB record
             if self.selected_file_id:
                 self.populate_update_form(self.selected_file_id)
+
+        elif selected_tab == "Missing Online":
+            if self.missing_online_url_var.get().strip():
+                self.load_missing_online_records()
+            else:
+                self.status_var.set("Paste a webpage URL in Missing Online and click Check Page.")
 
     def reset_scan(self):
         """Clear scanned file results and reset UI"""
@@ -2362,6 +2382,343 @@ class FileListerApp:
 
         self.chart_container = tk.Frame(chart_frame)
         self.chart_container.pack(fill="both", expand=True)
+
+    def setup_missing_online_tab(self, parent):
+        top = tk.Frame(parent)
+        top.pack(fill="x", padx=8, pady=6)
+
+        tk.Label(top, text="Webpage URL:", font=("Segoe UI", 9, "bold")).pack(side="left")
+        self.missing_online_url_entry = tk.Entry(
+            top,
+            textvariable=self.missing_online_url_var,
+            width=70
+        )
+        self.missing_online_url_entry.pack(side="left", padx=6, fill="x", expand=True)
+
+        tk.Button(top, text="Check Page", width=14,
+                  command=self.load_missing_online_records).pack(side="left", padx=4)
+        tk.Button(top, text="Open URL", width=10,
+                  command=self.open_selected_missing_online_url).pack(side="left", padx=4)
+        tk.Button(top, text="Copy URL", width=10,
+                  command=self.copy_selected_missing_online_url).pack(side="left", padx=4)
+
+        filter_frame = tk.Frame(parent)
+        filter_frame.pack(fill="x", padx=8, pady=(0, 4))
+
+        tk.Label(filter_frame, text="Search:").pack(side="left")
+        search_entry = tk.Entry(filter_frame, textvariable=self.missing_online_search_var, width=45)
+        search_entry.pack(side="left", padx=4)
+        self.missing_online_search_var.trace_add("write", lambda *a: self.filter_missing_online_records())
+
+        tk.Button(filter_frame, text="Refresh", width=12,
+                  command=self.load_missing_online_records).pack(side="left", padx=6)
+        tk.Button(top, text="Export to Excel", width=16,
+                  command=self.export_missing_online_to_excel).pack(side="right", padx=4)
+
+        self.missing_online_summary_var = tk.StringVar(value="Paste a webpage URL and click Check Page.")
+        tk.Label(parent, textvariable=self.missing_online_summary_var,
+                 anchor="w", font=("Segoe UI", 9)).pack(fill="x", padx=8, pady=2)
+
+        cols = ("No", "Name", "Year", "URL")
+        frame = tk.Frame(parent)
+        frame.pack(fill="both", expand=True, padx=8, pady=6)
+
+        self.missing_online_tree = ttk.Treeview(
+            frame,
+            columns=cols,
+            show="headings",
+            selectmode="extended"
+        )
+
+        for col in cols:
+            self.missing_online_tree.heading(
+                col,
+                text=col,
+                command=lambda c=col: self.sort_missing_online_by_column(c)
+            )
+            self.missing_online_tree.column(col, width=150, anchor="w")
+
+        self.missing_online_tree.column("No", width=60, anchor="center")
+        self.missing_online_tree.column("Year", width=70, anchor="center")
+        self.missing_online_tree.column("Name", width=360)
+        self.missing_online_tree.column("URL", width=620)
+
+        y_scroll = ttk.Scrollbar(frame, orient="vertical", command=self.missing_online_tree.yview)
+        x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=self.missing_online_tree.xview)
+        self.missing_online_tree.configure(
+            yscrollcommand=y_scroll.set,
+            xscrollcommand=x_scroll.set
+        )
+
+        self.missing_online_tree.grid(row=0, column=0, sticky="nsew")
+        y_scroll.grid(row=0, column=1, sticky="ns")
+        x_scroll.grid(row=1, column=0, sticky="ew")
+        frame.rowconfigure(0, weight=1)
+        frame.columnconfigure(0, weight=1)
+
+        self.missing_online_tree.bind("<Double-1>", lambda e: self.open_selected_missing_online_url())
+
+    def load_missing_online_records(self):
+        page_url = self.missing_online_url_var.get().strip()
+        if not page_url:
+            messagebox.showwarning("URL Required", "Paste the webpage URL first.")
+            return
+
+        if not self.current_db_path:
+            self.missing_online_rows = []
+            self.refresh_missing_online_tree([])
+            self.missing_online_summary_var.set("No SQLite database selected.")
+            return
+
+        self.missing_online_summary_var.set("Checking online page...")
+        self.status_var.set("Checking online page against database...")
+        self._set_missing_online_enabled(False)
+
+        thread = threading.Thread(
+            target=self._missing_online_worker,
+            args=(page_url,),
+            daemon=True
+        )
+        thread.start()
+
+    def _missing_online_worker(self, page_url):
+        try:
+            urls = scrape_category_urls(page_url)
+
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute("""
+                SELECT f.file_name, f.year, m.metadata_url
+                FROM Files f
+                LEFT JOIN MovieDetails m ON f.id = m.file_id
+            """)
+            db_rows = cur.fetchall()
+            conn.close()
+
+            db_names = set()
+            db_name_years = set()
+            db_names_without_year = set()
+            db_urls = set()
+
+            for file_name, year, metadata_url in db_rows:
+                norm_name = self.normalize_movie_compare_name(file_name)
+                if norm_name:
+                    db_names.add(norm_name)
+                    effective_year = year
+                    if not effective_year:
+                        year_match = re.search(r"(19|20)\d{2}", str(file_name))
+                        effective_year = year_match.group(0) if year_match else None
+
+                    if effective_year:
+                        db_name_years.add((norm_name, str(effective_year)))
+                    else:
+                        db_names_without_year.add(norm_name)
+
+                if metadata_url:
+                    db_urls.add(metadata_url.strip().rstrip("/").lower())
+
+            missing = []
+            seen = set()
+
+            for url in urls:
+                name, year = self.movie_name_year_from_url(url)
+                norm_name = self.normalize_movie_compare_name(name)
+                normalized_url = url.strip().rstrip("/").lower()
+
+                if not norm_name or normalized_url in seen:
+                    continue
+                seen.add(normalized_url)
+
+                exists_by_url = normalized_url in db_urls
+                exists_by_name_year = bool(year and (norm_name, str(year)) in db_name_years)
+                exists_by_name_without_year = bool(year and norm_name in db_names_without_year)
+                exists_by_name_only = not year and norm_name in db_names
+
+                if exists_by_url or exists_by_name_year or exists_by_name_without_year or exists_by_name_only:
+                    continue
+
+                missing.append((name, year, url))
+
+            missing.sort(key=lambda row: (row[1] or "", row[0].lower()))
+            self.root.after(0, lambda: self._finish_missing_online_check(len(urls), missing))
+
+        except Exception as e:
+            self.root.after(0, lambda: self._missing_online_error(e))
+
+    def _finish_missing_online_check(self, online_count, missing):
+        self._set_missing_online_enabled(True)
+        self.missing_online_rows = missing
+        self.filter_missing_online_records()
+        self.missing_online_summary_var.set(
+            f"Online movies found: {online_count} | Not in database: {len(missing)}"
+        )
+        self.status_var.set(f"Missing Online check complete: {len(missing)} missing.")
+
+    def _missing_online_error(self, error):
+        self._set_missing_online_enabled(True)
+        messagebox.showerror("Missing Online Error", str(error))
+        self.status_var.set("Failed to check online page.")
+
+    def _set_missing_online_enabled(self, enabled):
+        state = "normal" if enabled else "disabled"
+        for widget in (
+            getattr(self, "missing_online_url_entry", None),
+            getattr(self, "missing_online_tree", None),
+        ):
+            if not widget:
+                continue
+            try:
+                widget.configure(state=state)
+            except Exception:
+                try:
+                    widget.state(("!disabled",) if enabled else ("disabled",))
+                except Exception:
+                    pass
+
+    def movie_name_year_from_url(self, url):
+        slug = url.rstrip("/").split("/")[-1]
+        match = re.search(r"(.+)-((?:19|20)\d{2})$", slug)
+        if match:
+            name = match.group(1).replace("-", " ").title()
+            year = match.group(2)
+        else:
+            name = slug.replace("-", " ").title()
+            year = ""
+        return name, year
+
+    def normalize_movie_compare_name(self, name):
+        if not name:
+            return ""
+
+        base = os.path.splitext(str(name))[0]
+        base = re.sub(r"(19|20)\d{2}", "", base)
+        return normalize_name(base)
+
+    def filter_missing_online_records(self):
+        rows = list(self.missing_online_rows)
+        q = self.missing_online_search_var.get().strip().lower()
+
+        if q:
+            tokens = [re.sub(r"[^0-9a-z]", "", t) for t in re.findall(r"\w+", q) if t]
+
+            def matches(row):
+                searchable = " ".join(str(v or "") for v in row)
+                normalized = re.sub(r"[^0-9a-z]", "", searchable.lower())
+                return all(token in normalized for token in tokens if token)
+
+            rows = [row for row in rows if matches(row)]
+
+        self.refresh_missing_online_tree(rows)
+
+    def refresh_missing_online_tree(self, rows):
+        self.missing_online_tree.delete(*self.missing_online_tree.get_children())
+
+        for idx, row in enumerate(rows, start=1):
+            name, year, url = row
+            self.missing_online_tree.insert(
+                "",
+                "end",
+                values=(
+                    idx,
+                    name,
+                    year if year else "",
+                    url
+                )
+            )
+
+        total = len(rows)
+        source_total = len(self.missing_online_rows)
+        if total == source_total:
+            self.missing_online_summary_var.set(f"Not in database: {source_total}")
+        else:
+            self.missing_online_summary_var.set(
+                f"Not in database: {source_total} | Filtered: {total}"
+            )
+
+    def sort_missing_online_by_column(self, col):
+        col_map = {
+            "No": None,
+            "Name": 0,
+            "Year": 1,
+            "URL": 2,
+        }
+        idx = col_map.get(col)
+        if idx is None:
+            return
+
+        reverse = self._missing_online_sort_reverse.get(col, False)
+
+        def sort_key(row):
+            value = row[idx]
+            if col == "Year":
+                try:
+                    return int(value)
+                except Exception:
+                    return 0
+            return str(value or "").lower()
+
+        self.missing_online_rows = sorted(
+            self.missing_online_rows,
+            key=sort_key,
+            reverse=not reverse
+        )
+        self._missing_online_sort_reverse[col] = not reverse
+        self.filter_missing_online_records()
+
+    def get_selected_missing_online_url(self):
+        selected = self.missing_online_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Select a Missing Online row first.")
+            return None
+
+        values = self.missing_online_tree.item(selected[0], "values")
+        return values[3] if values and len(values) > 3 else None
+
+    def open_selected_missing_online_url(self):
+        url = self.get_selected_missing_online_url()
+        if not url:
+            return
+
+        try:
+            os.startfile(url)
+        except Exception as e:
+            messagebox.showerror("Open URL Error", str(e))
+
+    def copy_selected_missing_online_url(self):
+        url = self.get_selected_missing_online_url()
+        if not url:
+            return
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(url)
+        self.status_var.set("Movie URL copied to clipboard.")
+
+    def export_missing_online_to_excel(self):
+        if not self.current_db_path:
+            messagebox.showinfo("Info", "Open DB first")
+            return
+
+        rows = []
+        for item in self.missing_online_tree.get_children():
+            rows.append(self.missing_online_tree.item(item, "values"))
+
+        if not rows:
+            messagebox.showinfo("Info", "No Missing Online rows to export.")
+            return
+
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel", "*.xlsx")]
+        )
+        if not path:
+            return
+
+        try:
+            df = pd.DataFrame(rows, columns=self.missing_online_tree["columns"])
+            df.to_excel(path, index=False)
+            messagebox.showinfo("Success", f"Exported to {path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Export failed: {e}")
 
     
     def setup_duplicates_tab(self, parent):
@@ -3334,7 +3691,8 @@ class FileListerApp:
                        m.category,
                        m.description,
                        m.cover1_path,
-                       m.cover2_path
+                       m.cover2_path,
+                       m.metadata_url
                 FROM Files f
                 LEFT JOIN MovieDetails m ON f.id = m.file_id
                 WHERE f.id=?
@@ -3349,11 +3707,13 @@ class FileListerApp:
             if not row:
                 return  # No metadata stored yet
 
-            year, category, description, cover1_path, cover2_path = row
+            year, category, description, cover1_path, cover2_path, metadata_url = row
 
             # Load text
             self.category_var.set(category or "")
             self.year_var.set(str(year) if year else "")
+            if hasattr(self, "meta_url_var"):
+                self.meta_url_var.set(metadata_url or "")
 
             self.description_text.delete("1.0", tk.END)
             self.description_text.insert("1.0", description or "")

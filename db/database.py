@@ -1,6 +1,12 @@
 import sqlite3
 import os
-from db.schema import FILES_TABLE_SQL, FILES_TABLE_INDEX, CATEGORIES_TABLE_SQL, DB_SELECT_ALL
+from db.schema import (
+    FILES_TABLE_SQL,
+    FILES_TABLE_INDEX,
+    CATEGORIES_TABLE_SQL,
+    MOVIE_TABLE_SQL,
+    DB_SELECT_ALL,
+)
 
 def init_db(db_path, fresh=False):
         """
@@ -16,10 +22,12 @@ def init_db(db_path, fresh=False):
         cur = conn.cursor()
 
         if fresh:
+            cur.execute("DROP TABLE IF EXISTS MovieDetails")
             cur.execute("DROP TABLE IF EXISTS Files")
             cur.execute("DROP TABLE IF EXISTS Categories")
 
         cur.execute(FILES_TABLE_SQL)
+        cur.execute(MOVIE_TABLE_SQL)
         cur.execute(FILES_TABLE_INDEX)
         cur.execute(CATEGORIES_TABLE_SQL)
 

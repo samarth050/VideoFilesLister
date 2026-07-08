@@ -11,7 +11,7 @@ It is safe to import into FileLister.
 import re
 import requests
 from bs4 import BeautifulSoup
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # ------------------------------
 # Persistent HTTP session
@@ -210,12 +210,14 @@ def scrape_category_urls(category_url, timeout=15):
     soup = BeautifulSoup(response.text, "html.parser")
 
     urls = set()
+    source_host = urlparse(category_url).netloc.lower()
 
     for a in soup.find_all("a", href=True):
-        href = a["href"]
+        href = urljoin(category_url, a["href"])
+        parsed = urlparse(href)
 
-        # Match movie pattern like /movie-name-1979/
-        if re.match(r"https://rarelust\.com/.+-\d{4}/?$", href):
+        # Match same-site movie patterns like /movie-name-1979/
+        if parsed.netloc.lower() == source_host and re.match(r"^/.+-\d{4}/?$", parsed.path):
             urls.add(href.rstrip("/"))
 
     return list(urls)
