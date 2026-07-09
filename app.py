@@ -228,6 +228,8 @@ class FileListerApp:
         self.selected_storage_filter = tk.StringVar(value="ALL")
         self.available_storage_ids = ["ALL"]
         self.missing_online_url_var = tk.StringVar()
+        self.missing_online_category_var = tk.StringVar(value="All")
+        self._missing_online_stop_event = threading.Event()
         self.missing_online_search_var = tk.StringVar()
         self.missing_online_rows = []
         self._missing_online_sort_reverse = {}
@@ -1568,7 +1570,7 @@ class FileListerApp:
         self.notebook.add(self.gallery_tab, text="Gallery")
         self.notebook.add(self.movie_details_tab, text="Movie Details")
         self.notebook.add(self.update_tab, text="Update")
-        self.notebook.add(self.missing_online_tab, text="Missing Online")
+        self.notebook.add(self.missing_online_tab, text="To Download")
         self.notebook.add(dup_tab, text="Duplicates")
 
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
@@ -1654,11 +1656,13 @@ class FileListerApp:
             if self.selected_file_id:
                 self.populate_update_form(self.selected_file_id)
 
-        elif selected_tab == "Missing Online":
-            if self.missing_online_url_var.get().strip():
-                self.load_missing_online_records()
+        elif selected_tab == "To Download":
+            # Do not auto-run the To Download check when switching tabs.
+            # If we already have results cached, refresh the tree view; otherwise show instructions.
+            if getattr(self, 'missing_online_rows', None):
+                self.refresh_missing_online_tree(self.missing_online_rows)
             else:
-                self.status_var.set("Paste a webpage URL in Missing Online and click Check Page.")
+                self.status_var.set("Paste a webpage URL in To Download and click Check Page.")
 
     def reset_scan(self):
         """Clear scanned file results and reset UI"""
@@ -2395,8 +2399,39 @@ class FileListerApp:
         )
         self.missing_online_url_entry.pack(side="left", padx=6, fill="x", expand=True)
 
+        # Category selector for filtering which DB categories to compare against
+        cats = ["All"] + self.get_all_categories()
+        self.missing_online_category_combo = ttk.Combobox(top, values=cats, textvariable=self.missing_online_category_var, width=24)
+        self.missing_online_category_combo.pack(side="left", padx=6)
+
+        # Progress bar to show checking progress
+        self.missing_online_progress = ttk.Progressbar(top, orient="horizontal", length=180, mode="determinate")
+        self.missing_online_progress.pack(side="left", padx=6)
+
+        # Right-click context menu for Cut/Copy/Paste on the URL entry
+        try:
+            _url_entry_menu = tk.Menu(self.root, tearoff=0)
+            _url_entry_menu.add_command(label="Cut", command=lambda: self.missing_online_url_entry.event_generate("<<Cut>>"))
+            _url_entry_menu.add_command(label="Copy", command=lambda: self.missing_online_url_entry.event_generate("<<Copy>>"))
+            _url_entry_menu.add_command(label="Paste", command=lambda: self.missing_online_url_entry.event_generate("<<Paste>>"))
+
+            def _show_url_entry_menu(event):
+                try:
+                    _url_entry_menu.tk_popup(event.x_root, event.y_root)
+                finally:
+                    _url_entry_menu.grab_release()
+
+            # Windows/Linux right-click
+            self.missing_online_url_entry.bind("<Button-3>", _show_url_entry_menu)
+            # macOS secondary click
+            self.missing_online_url_entry.bind("<Button-2>", _show_url_entry_menu)
+        except Exception:
+            pass
+
         tk.Button(top, text="Check Page", width=14,
-                  command=self.load_missing_online_records).pack(side="left", padx=4)
+              command=self.load_missing_online_records).pack(side="left", padx=4)
+        self.missing_online_stop_btn = tk.Button(top, text="Stop", width=10, state="disabled", command=self.stop_missing_online_check)
+        self.missing_online_stop_btn.pack(side="left", padx=4)
         tk.Button(top, text="Open URL", width=10,
                   command=self.open_selected_missing_online_url).pack(side="left", padx=4)
         tk.Button(top, text="Copy URL", width=10,
@@ -2415,7 +2450,7 @@ class FileListerApp:
         tk.Button(top, text="Export to Excel", width=16,
                   command=self.export_missing_online_to_excel).pack(side="right", padx=4)
 
-        self.missing_online_summary_var = tk.StringVar(value="Paste a webpage URL and click Check Page.")
+        self.missing_online_summary_var = tk.StringVar(value="Paste a webpage URL, select a category, and click Check Page.")
         tk.Label(parent, textvariable=self.missing_online_summary_var,
                  anchor="w", font=("Segoe UI", 9)).pack(fill="x", padx=8, pady=2)
 
@@ -2472,23 +2507,32 @@ class FileListerApp:
 
         self.missing_online_summary_var.set("Checking online page...")
         self.status_var.set("Checking online page against database...")
+        # prepare stop event
+        self._missing_online_stop_event.clear()
+        # disable main controls but enable Stop button
         self._set_missing_online_enabled(False)
+        try:
+            self.missing_online_stop_btn.configure(state="normal")
+        except Exception:
+            pass
 
+        selected_category = self.missing_online_category_var.get()
         thread = threading.Thread(
             target=self._missing_online_worker,
-            args=(page_url,),
+            args=(page_url, selected_category),
             daemon=True
         )
         thread.start()
 
-    def _missing_online_worker(self, page_url):
+    def _missing_online_worker(self, page_url, category_filter="All"):
         try:
             urls = scrape_category_urls(page_url)
 
             conn = self.get_connection()
             cur = conn.cursor()
+            # fetch name, year, metadata_url and effective category (MovieDetails.category or Files.category)
             cur.execute("""
-                SELECT f.file_name, f.year, m.metadata_url
+                SELECT f.file_name, f.year, m.metadata_url, COALESCE(m.category, f.category) as category
                 FROM Files f
                 LEFT JOIN MovieDetails m ON f.id = m.file_id
             """)
@@ -2500,7 +2544,12 @@ class FileListerApp:
             db_names_without_year = set()
             db_urls = set()
 
-            for file_name, year, metadata_url in db_rows:
+            for file_name, year, metadata_url, row_category in db_rows:
+                # If a specific category is selected, only index DB rows matching it (case-insensitive substring match)
+                if category_filter and category_filter != "All":
+                    if not row_category or category_filter.lower() not in str(row_category).lower():
+                        continue
+
                 norm_name = self.normalize_movie_compare_name(file_name)
                 if norm_name:
                     db_names.add(norm_name)
@@ -2519,14 +2568,71 @@ class FileListerApp:
 
             missing = []
             seen = set()
+            added_names = set()
 
-            for url in urls:
-                name, year = self.movie_name_year_from_url(url)
-                norm_name = self.normalize_movie_compare_name(name)
+            total = len(urls)
+            # initialize progress bar on main thread
+            self.root.after(0, lambda: self.missing_online_progress.configure(maximum=max(1, total), value=0))
+
+            for idx, url in enumerate(urls, start=1):
+                # stop requested?
+                if getattr(self, "_missing_online_stop_event", None) and self._missing_online_stop_event.is_set():
+                    # notify main thread to clean up
+                    self.root.after(0, lambda: self._missing_online_stopped(len(urls), missing))
+                    return
+
                 normalized_url = url.strip().rstrip("/").lower()
 
-                if not norm_name or normalized_url in seen:
+                # skip fragment links that point to page anchors/comments
+                if any(frag in normalized_url for frag in ("#comments", "#more", "#respond")):
                     continue
+
+                # update progress UI
+                self.root.after(0, lambda i=idx, t=total: (
+                    self.missing_online_summary_var.set(f"Checking {i}/{t} pages..."),
+                    self.status_var.set(f"Checking online page ({i}/{t})...") ,
+                    self.missing_online_progress.configure(value=i)
+                ))
+
+                if normalized_url in seen:
+                    continue
+
+                # Fetch movie details to get canonical name, year, and category
+                try:
+                    meta = scrape_movie(url)
+                except Exception:
+                    # If scraping fails, skip this URL
+                    continue
+
+                # check stop again after network call
+                if getattr(self, "_missing_online_stop_event", None) and self._missing_online_stop_event.is_set():
+                    self.root.after(0, lambda: self._missing_online_stopped(len(urls), missing))
+                    return
+
+                name = meta.get("name", "")
+                year = meta.get("year", "")
+                scraped_category = meta.get("category", "") or ""
+
+                # Skip items that look like comments or anchors
+                if name.strip().startswith("#"):
+                    continue
+
+                # If a specific category is selected, ensure scraped category matches
+                if category_filter and category_filter != "All":
+                    if not scraped_category or category_filter.lower() not in scraped_category.lower():
+                        continue
+
+                norm_name = self.normalize_movie_compare_name(name)
+
+                if not norm_name:
+                    continue
+
+                # avoid listing same movie name multiple times when different URLs point to it
+                if norm_name in added_names:
+                    seen.add(normalized_url)
+                    continue
+
+                added_names.add(norm_name)
                 seen.add(normalized_url)
 
                 exists_by_url = normalized_url in db_urls
@@ -2549,15 +2655,61 @@ class FileListerApp:
         self._set_missing_online_enabled(True)
         self.missing_online_rows = missing
         self.filter_missing_online_records()
+        # finalize progress UI
+        try:
+            self.missing_online_progress.configure(value=0)
+        except Exception:
+            pass
+        try:
+            self.missing_online_stop_btn.configure(state="disabled")
+        except Exception:
+            pass
+
         self.missing_online_summary_var.set(
             f"Online movies found: {online_count} | Not in database: {len(missing)}"
         )
-        self.status_var.set(f"Missing Online check complete: {len(missing)} missing.")
+        self.status_var.set(f"To Download check complete: {len(missing)} missing.")
 
     def _missing_online_error(self, error):
         self._set_missing_online_enabled(True)
-        messagebox.showerror("Missing Online Error", str(error))
+        messagebox.showerror("To Download Error", str(error))
         self.status_var.set("Failed to check online page.")
+        try:
+            self.missing_online_stop_btn.configure(state="disabled")
+        except Exception:
+            pass
+
+    def stop_missing_online_check(self):
+        # Signal the background worker to stop
+        try:
+            self._missing_online_stop_event.set()
+        except Exception:
+            pass
+        try:
+            self.missing_online_stop_btn.configure(state="disabled")
+        except Exception:
+            pass
+        self.status_var.set("Stopping To Download search...")
+        self.missing_online_summary_var.set("Stopping...")
+
+    def _missing_online_stopped(self, processed_count, missing):
+        # Called on main thread when worker stops early via stop event
+        self._set_missing_online_enabled(True)
+        try:
+            self.missing_online_progress.configure(value=0)
+        except Exception:
+            pass
+        try:
+            self.missing_online_stop_btn.configure(state="disabled")
+        except Exception:
+            pass
+
+        # keep partial results
+        self.missing_online_rows = missing
+        self.filter_missing_online_records()
+
+        self.missing_online_summary_var.set(f"Search stopped after checking {processed_count} pages. Not in database: {len(missing)}")
+        self.status_var.set("To Download search stopped by user.")
 
     def _set_missing_online_enabled(self, enabled):
         state = "normal" if enabled else "disabled"
@@ -2574,6 +2726,14 @@ class FileListerApp:
                     widget.state(("!disabled",) if enabled else ("disabled",))
                 except Exception:
                     pass
+        # stop button handled separately (enabled only while running)
+        try:
+            if enabled:
+                self.missing_online_stop_btn.configure(state="disabled")
+            else:
+                self.missing_online_stop_btn.configure(state="normal")
+        except Exception:
+            pass
 
     def movie_name_year_from_url(self, url):
         slug = url.rstrip("/").split("/")[-1]
@@ -2668,7 +2828,7 @@ class FileListerApp:
     def get_selected_missing_online_url(self):
         selected = self.missing_online_tree.selection()
         if not selected:
-            messagebox.showwarning("No Selection", "Select a Missing Online row first.")
+            messagebox.showwarning("No Selection", "Select a To Download row first.")
             return None
 
         values = self.missing_online_tree.item(selected[0], "values")
@@ -2703,7 +2863,7 @@ class FileListerApp:
             rows.append(self.missing_online_tree.item(item, "values"))
 
         if not rows:
-            messagebox.showinfo("Info", "No Missing Online rows to export.")
+            messagebox.showinfo("Info", "No To Download rows to export.")
             return
 
         path = filedialog.asksaveasfilename(
