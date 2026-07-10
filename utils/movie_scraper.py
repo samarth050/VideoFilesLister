@@ -69,6 +69,33 @@ KNOWN_CATEGORIES = [
 # ------------------------------
 # Public API
 # ------------------------------
+def extract_size_info(text):
+    if not text:
+        return {"size_text": "", "size_bytes": None}
+
+    normalized = re.sub(r"\s+", " ", text).strip()
+    size_pattern = re.compile(
+        r"(?P<value>\d+(?:[.,]\d+)?)\s*(?P<unit>kb|mb|gb|tb)",
+        re.IGNORECASE,
+    )
+
+    for match in size_pattern.finditer(normalized):
+        value = float(match.group("value").replace(",", "."))
+        unit = match.group("unit").lower()
+        multipliers = {"kb": 1024, "mb": 1024**2, "gb": 1024**3, "tb": 1024**4}
+        size_bytes = int(value * multipliers[unit])
+
+        if abs(value - round(value)) < 1e-9:
+            size_text = f"{int(round(value))} {unit.upper()}"
+        else:
+            value_text = f"{value:.2f}".rstrip("0").rstrip(".")
+            size_text = f"{value_text} {unit.upper()}"
+
+        return {"size_text": size_text, "size_bytes": size_bytes}
+
+    return {"size_text": "", "size_bytes": None}
+
+
 def scrape_movie(url, timeout=15):
     r = SESSION.get(url, timeout=timeout)
     r.raise_for_status()
@@ -95,6 +122,17 @@ def scrape_movie(url, timeout=15):
 
     # -------- Article Content --------
     content = soup.select_one(".entry-content")
+    candidate_texts = []
+
+    if content:
+        for p in content.find_all("p"):
+            paragraph_text = p.get_text(" ", strip=True)
+            if paragraph_text:
+                candidate_texts.append(paragraph_text)
+
+    full_text = soup.get_text(" ", strip=True)
+    candidate_texts.append(full_text)
+    size_info = extract_size_info(" \n ".join(candidate_texts))
 
     # -------- Description --------
     description = ""
@@ -148,7 +186,9 @@ def scrape_movie(url, timeout=15):
         "year": year,
         "category": category,
         "description": description,
-        "images": images
+        "images": images,
+        "size_text": size_info["size_text"],
+        "size_bytes": size_info["size_bytes"],
     }
 """def scrape_movie(url, timeout=15):
     headers = {

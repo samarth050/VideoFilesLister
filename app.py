@@ -2454,7 +2454,7 @@ class FileListerApp:
         tk.Label(parent, textvariable=self.missing_online_summary_var,
                  anchor="w", font=("Segoe UI", 9)).pack(fill="x", padx=8, pady=2)
 
-        cols = ("No", "Name", "Year", "URL")
+        cols = ("No", "Name", "Year", "Size", "URL")
         frame = tk.Frame(parent)
         frame.pack(fill="both", expand=True, padx=8, pady=6)
 
@@ -2476,7 +2476,8 @@ class FileListerApp:
         self.missing_online_tree.column("No", width=60, anchor="center")
         self.missing_online_tree.column("Year", width=70, anchor="center")
         self.missing_online_tree.column("Name", width=360)
-        self.missing_online_tree.column("URL", width=620)
+        self.missing_online_tree.column("Size", width=120, anchor="center")
+        self.missing_online_tree.column("URL", width=560)
 
         y_scroll = ttk.Scrollbar(frame, orient="vertical", command=self.missing_online_tree.yview)
         x_scroll = ttk.Scrollbar(frame, orient="horizontal", command=self.missing_online_tree.xview)
@@ -2643,7 +2644,9 @@ class FileListerApp:
                 if exists_by_url or exists_by_name_year or exists_by_name_without_year or exists_by_name_only:
                     continue
 
-                missing.append((name, year, url))
+                size_text = meta.get("size_text") or ""
+                size_bytes = meta.get("size_bytes")
+                missing.append((name, year, size_text, size_bytes, url))
 
             missing.sort(key=lambda row: (row[1] or "", row[0].lower()))
             self.root.after(0, lambda: self._finish_missing_online_check(len(urls), missing))
@@ -2774,7 +2777,16 @@ class FileListerApp:
         self.missing_online_tree.delete(*self.missing_online_tree.get_children())
 
         for idx, row in enumerate(rows, start=1):
-            name, year, url = row
+            if len(row) >= 5:
+                name, year, size_text, size_bytes, url = row[0], row[1], row[2], row[3], row[4]
+            elif len(row) == 4:
+                name, year, size_text, url = row[0], row[1], row[2], row[3]
+                size_bytes = None
+            else:
+                name, year, url = row[0], row[1], row[2] if len(row) > 2 else ""
+                size_text = ""
+                size_bytes = None
+
             self.missing_online_tree.insert(
                 "",
                 "end",
@@ -2782,6 +2794,7 @@ class FileListerApp:
                     idx,
                     name,
                     year if year else "",
+                    size_text or "N/A",
                     url
                 )
             )
@@ -2800,7 +2813,8 @@ class FileListerApp:
             "No": None,
             "Name": 0,
             "Year": 1,
-            "URL": 2,
+            "Size": "size",
+            "URL": 4,
         }
         idx = col_map.get(col)
         if idx is None:
@@ -2809,6 +2823,12 @@ class FileListerApp:
         reverse = self._missing_online_sort_reverse.get(col, False)
 
         def sort_key(row):
+            if col == "Size":
+                try:
+                    return int(row[3] or 0)
+                except Exception:
+                    return 0
+
             value = row[idx]
             if col == "Year":
                 try:
@@ -2832,7 +2852,7 @@ class FileListerApp:
             return None
 
         values = self.missing_online_tree.item(selected[0], "values")
-        return values[3] if values and len(values) > 3 else None
+        return values[4] if values and len(values) > 4 else None
 
     def open_selected_missing_online_url(self):
         url = self.get_selected_missing_online_url()
