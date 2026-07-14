@@ -2546,11 +2546,6 @@ class FileListerApp:
             db_urls = set()
 
             for file_name, year, metadata_url, row_category in db_rows:
-                # If a specific category is selected, only index DB rows matching it (case-insensitive substring match)
-                if category_filter and category_filter != "All":
-                    if not row_category or category_filter.lower() not in str(row_category).lower():
-                        continue
-
                 norm_name = self.normalize_movie_compare_name(file_name)
                 if norm_name:
                     db_names.add(norm_name)
