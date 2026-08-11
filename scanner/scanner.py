@@ -134,20 +134,18 @@ def detect_storage_id_from_path(path):
 
         label = get_drive_label(drive)
 
-        # your existing meaningful folder-based ID logic
-        storage = "UNKNOWN"
-        parts = os.path.normpath(path).split(os.sep)
+        # If a drive label exists, use it as the canonical storage ID.
+        if label:
+            return label.strip() or drive
 
+        # Fallback to meaningful folder-based ID logic if present.
+        parts = os.path.normpath(path).split(os.sep)
         for p in parts:
             up = p.upper()
             if up.startswith(("HDD", "SSD", "USB", "MEDIA", "DRIVE")):
-                storage = p
-                break
+                return p.strip()
 
-        if label:
-            return f"{label} ({drive})"
-        else:
-            return f"{drive}"
+        return drive or "UNKNOWN"
 
 def get_windows_drive_label(drive_letter):
         try:

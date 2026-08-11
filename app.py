@@ -168,6 +168,20 @@ class ExportDialog:
 def normalize_name(text):
     return re.sub(r'[^a-z0-9]', '', text.lower())
 
+def normalize_title_for_match(text):
+    if not text:
+        return ""
+
+    title = text.lower()
+    title = re.sub(r"\[[^\]]*\]", " ", title)
+    title = re.sub(r"\([^\)]*\)", " ", title)
+    title = re.sub(r"(19|20)\d{2}", " ", title)
+    title = re.sub(r"\b(the|a|an)\b", " ", title)
+    title = re.sub(r"[^a-z0-9]+", " ", title)
+    title = re.sub(r"\b\d+\b", " ", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    return title.replace(" ", "")
+
 class FileListerApp:
     CONFIG_FILE = str(APP_DIR / "app_settings.json")
     LEGACY_CONFIG_FILE = str(APP_DIR / "config.json")
@@ -212,6 +226,10 @@ class FileListerApp:
         # File data stores
         self.all_files_info = []
         self.file_paths = {}
+        self.scan_results = []
+        self.scan_item_map = {}
+        self.scan_inline_entry = None
+        self.scan_operation_in_progress = False
 
         # SQLite viewer state
         #self.current_db_path = None
@@ -477,6 +495,12 @@ class FileListerApp:
         conn = sqlite3.connect(self.current_db_path)
         conn.execute("PRAGMA foreign_keys = ON")
         return conn
+
+    def get_storage_id(self):
+        storage_id = "UNKNOWN"
+        if hasattr(self, "storage_id_var"):
+            storage_id = self.storage_id_var.get().strip()
+        return storage_id if storage_id else "UNKNOWN"
 
     def resolve_app_path(self, path):
         if not path:
@@ -1556,15 +1580,17 @@ class FileListerApp:
         self.notebook.pack(fill="both", expand=True)
 
         main_tab = ttk.Frame(self.notebook)
+        scan_tab = ttk.Frame(self.notebook)
         stats_tab = ttk.Frame(self.notebook)
         db_tab = ttk.Frame(self.notebook)
-        self.gallery_tab = ttk.Frame(self.notebook)      # ✅ store reference
-        self.movie_details_tab = ttk.Frame(self.notebook)  # ✅ store reference
+        self.gallery_tab = ttk.Frame(self.notebook)
+        self.movie_details_tab = ttk.Frame(self.notebook)
         self.update_tab = ttk.Frame(self.notebook)
         self.missing_online_tab = ttk.Frame(self.notebook)
         dup_tab = ttk.Frame(self.notebook)
 
         self.notebook.add(main_tab, text="Files List")
+        self.notebook.add(scan_tab, text="Folder Scan")
         self.notebook.add(stats_tab, text="Statistics")
         self.notebook.add(db_tab, text="SQLite Viewer")
         self.notebook.add(self.gallery_tab, text="Gallery")
@@ -1576,6 +1602,7 @@ class FileListerApp:
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
         self.setup_main_tab(main_tab)
+        self.setup_folder_scan_tab(scan_tab)
         self.setup_stats_tab(stats_tab)
         self.setup_db_viewer_tab(db_tab)
         self.setup_movie_details_tab(self.movie_details_tab)
@@ -1871,8 +1898,459 @@ class FileListerApp:
 
         tk.Button(bottom, text="Export to Excel", command=self.export_to_excel).pack(side="right")
         tk.Button(bottom, text="Export to SQLite", command=self.export_to_sqlite).pack(side="right", padx=5)
-    
-    def get_storage_id(self):
+
+    def setup_folder_scan_tab(self, parent):
+        folder_frame = tk.Frame(parent)
+        folder_frame.pack(fill="x", pady=5)
+
+        tk.Label(folder_frame, text="Folder: ").pack(side="left")
+        self.scan_folder_path = tk.StringVar()
+        tk.Entry(folder_frame, textvariable=self.scan_folder_path, width=60).pack(side="left", padx=5)
+        tk.Button(folder_frame, text="Browse", command=self.browse_scan_folder).pack(side="left")
+
+        opt_frame = tk.Frame(parent)
+        opt_frame.pack(fill="x", pady=5)
+
+        self.scan_include_subdirs = tk.BooleanVar(value=True)
+        tk.Checkbutton(
+            opt_frame,
+            text="Include subdirectories",
+            variable=self.scan_include_subdirs
+        ).pack(side="left")
+
+        self.scan_match_ext = tk.BooleanVar(value=True)
+        self.scan_match_size = tk.BooleanVar(value=False)
+        tk.Checkbutton(
+            opt_frame,
+            text="Use extension in comparison",
+            variable=self.scan_match_ext
+        ).pack(side="left", padx=(10, 0))
+        tk.Checkbutton(
+            opt_frame,
+            text="Use size in comparison",
+            variable=self.scan_match_size
+        ).pack(side="left", padx=(10, 0))
+
+        tk.Button(opt_frame, text="Scan Folder", command=self.scan_folder).pack(side="right")
+
+        header_frame = tk.Frame(parent)
+        header_frame.pack(fill="x", pady=2)
+        self.scan_files_count_var = tk.StringVar(value="Files: 0")
+        self.scan_matches_count_var = tk.StringVar(value="Matched Files: 0")
+        tk.Label(header_frame, textvariable=self.scan_files_count_var).pack(side="left")
+        tk.Label(header_frame, textvariable=self.scan_matches_count_var, fg="darkgreen").pack(side="left", padx=(20,0))
+
+        table_frame = tk.Frame(parent)
+        table_frame.pack(fill="both", expand=True)
+
+        cols = ("name", "ext", "size", "storage", "matched", "dest_name")
+        self.scan_tree = ttk.Treeview(table_frame, columns=cols, show="headings")
+        self.scan_tree.heading("name", text="Source Name")
+        self.scan_tree.heading("ext", text="Extension")
+        self.scan_tree.heading("size", text="File Size")
+        self.scan_tree.heading("storage", text="Storage ID")
+        self.scan_tree.heading("matched", text="Match Count")
+        self.scan_tree.heading("dest_name", text="Destination Name")
+
+        self.scan_tree.column("name", width=260, anchor="w")
+        self.scan_tree.column("ext", width=100, anchor="center")
+        self.scan_tree.column("size", width=120, anchor="e")
+        self.scan_tree.column("storage", width=140, anchor="center")
+        self.scan_tree.column("matched", width=100, anchor="center")
+        self.scan_tree.column("dest_name", width=220, anchor="w")
+
+        yscroll = ttk.Scrollbar(table_frame, orient="vertical", command=self.scan_tree.yview)
+        xscroll = ttk.Scrollbar(table_frame, orient="horizontal", command=self.scan_tree.xview)
+        self.scan_tree.configure(yscrollcommand=yscroll.set, xscrollcommand=xscroll.set)
+
+        self.scan_tree.pack(side="left", fill="both", expand=True)
+        yscroll.pack(side="right", fill="y")
+        xscroll.pack(side="bottom", fill="x")
+
+        self.scan_tree.bind("<<TreeviewSelect>>", lambda e: None)
+        self.scan_tree.bind("<Double-1>", self.on_scan_tree_double_click)
+
+        dest_frame = tk.Frame(parent)
+        dest_frame.pack(fill="x", pady=6)
+
+        tk.Label(dest_frame, text="Destination Folder:").pack(side="left")
+        self.scan_dest_path = tk.StringVar()
+        tk.Entry(dest_frame, textvariable=self.scan_dest_path, width=60).pack(side="left", padx=5)
+        tk.Button(dest_frame, text="Browse", command=self.browse_destination_folder).pack(side="left")
+
+        action_frame = tk.Frame(parent)
+        action_frame.pack(fill="x", pady=6)
+
+        self.scan_operation = tk.StringVar(value="copy")
+        tk.Radiobutton(action_frame, text="Copy selected", variable=self.scan_operation, value="copy").pack(side="left")
+        tk.Radiobutton(action_frame, text="Move selected", variable=self.scan_operation, value="move").pack(side="left", padx=(10,0))
+
+        self.scan_add_to_db = tk.BooleanVar(value=False)
+        self.scan_add_to_db_checkbox = tk.Checkbutton(action_frame, text="Add moved/copied files to DB", variable=self.scan_add_to_db)
+        self.scan_add_to_db_checkbox.pack(side="left", padx=(20,0))
+
+        self.scan_edit_dest_button = tk.Button(action_frame, text="Edit Selected Destination Name", command=self.edit_selected_destination_name)
+        self.scan_edit_dest_button.pack(side="right")
+        self.scan_copy_move_button = tk.Button(action_frame, text="Copy/Move Selected", command=self.copy_or_move_selected_files)
+        self.scan_copy_move_button.pack(side="right", padx=5)
+
+        progress_frame = tk.Frame(parent)
+        progress_frame.pack(fill="x", pady=4)
+        self.scan_progress_var = tk.StringVar(value="")
+        self.scan_progress_bar = ttk.Progressbar(progress_frame, orient="horizontal", length=240, mode="determinate")
+        self.scan_progress_bar.pack(side="left", padx=(0, 10), pady=2)
+        tk.Label(progress_frame, textvariable=self.scan_progress_var).pack(side="left")
+
+    def browse_scan_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.scan_folder_path.set(folder)
+            self.status_var.set(f"Selected scan path: {folder}")
+
+    def scan_folder(self):
+        folder = self.scan_folder_path.get()
+        if not folder or not os.path.isdir(folder):
+            messagebox.showerror("Error", "Please select a valid folder to scan.")
+            return
+
+        self.scan_tree.delete(*self.scan_tree.get_children())
+        self.scan_item_map.clear()
+        self.scan_results = get_files_info(
+            folder,
+            self.allowed_video_exts,
+            self.scan_include_subdirs.get()
+        )
+
+        for info in self.scan_results:
+            info["dest_name"] = info.get("name_without_ext", "")
+
+        self.scan_results.sort(key=lambda i: i["name_without_ext"].lower())
+
+        use_extension = self.scan_match_ext.get()
+        use_size = self.scan_match_size.get()
+
+        matched = 0
+        for info in self.scan_results:
+            storage_id, match_count = self.find_nearest_db_match(info, use_extension, use_size)
+            if match_count > 0:
+                matched += 1
+            iid = self.scan_tree.insert(
+                "",
+                "end",
+                values=(
+                    info["name_without_ext"],
+                    info["extension"],
+                    format_size(info["size"]),
+                    storage_id or "",
+                    match_count,
+                    info["dest_name"]
+                )
+            )
+            self.scan_item_map[iid] = info
+
+        total = len(self.scan_results)
+        self.scan_files_count_var.set(f"Files: {total}")
+        self.scan_matches_count_var.set(f"Matched Files: {matched}")
+        self.status_var.set(f"Scanned {total} files. Matches found: {matched}.")
+
+    def find_nearest_db_match(self, file_info, use_extension=True, use_size=False):
+        if not self.current_db_path or not os.path.exists(self.current_db_path):
+            return None, 0
+
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT file_name, extension, size_bytes, storage_id, year FROM Files"
+            )
+            rows = cur.fetchall()
+            conn.close()
+        except Exception:
+            return None, 0
+
+        target_name = file_info.get("name_without_ext", "")
+        target_ext = file_info.get("extension", "").lstrip(".").lower()
+        target_size = file_info.get("size", 0)
+        target_year = file_info.get("year")
+        target_norm = normalize_title_for_match(target_name)
+
+        best_storage = None
+        best_score = -999
+        match_count = 0
+
+        for db_name, db_ext, db_size, storage_id, db_year in rows:
+            db_norm = normalize_title_for_match(db_name or "")
+            if db_norm != target_norm:
+                continue
+
+            match_count += 1
+            score = 0
+            if use_extension and db_ext and target_ext:
+                if db_ext.lstrip(".").lower() == target_ext:
+                    score += 6
+                else:
+                    score -= 2
+
+            if target_year and db_year:
+                if str(target_year) == str(db_year):
+                    score += 4
+                else:
+                    score -= 1
+
+            if use_size:
+                size_diff = abs((db_size or 0) - (target_size or 0))
+                if size_diff == 0:
+                    score += 10
+                else:
+                    score += max(0, 5 - (size_diff / (1024 * 1024 * 5)))
+
+            if score > best_score:
+                best_score = score
+                best_storage = storage_id
+
+        return best_storage, match_count
+
+    def browse_destination_folder(self):
+        folder = filedialog.askdirectory()
+        if folder:
+            self.scan_dest_path.set(folder)
+            self.status_var.set(f"Selected destination: {folder}")
+
+    def on_scan_tree_double_click(self, event):
+        row = self.scan_tree.identify_row(event.y)
+        col = self.scan_tree.identify_column(event.x)
+        if not row or col != "#5":
+            return
+        self.edit_destination_name(row)
+
+    def edit_selected_destination_name(self):
+        selected = self.scan_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select a record to edit.")
+            return
+        if len(selected) > 1:
+            messagebox.showwarning("Multiple Selection", "Please edit one record at a time.")
+            return
+        self.edit_destination_name(selected[0])
+
+    def edit_destination_name(self, iid):
+        if self.scan_inline_entry:
+            self.finish_scan_dest_edit()
+
+        bbox = self.scan_tree.bbox(iid, column="dest_name")
+        if not bbox:
+            return
+
+        x, y, width, height = bbox
+        self.scan_tree.update_idletasks()
+
+        entry = tk.Entry(self.scan_tree)
+        entry.insert(0, self.scan_item_map.get(iid, {}).get("dest_name", ""))
+        entry.place(x=x, y=y, width=width, height=height)
+        entry.focus_set()
+        entry.selection_range(0, tk.END)
+
+        entry.bind("<Return>", lambda e: self.finish_scan_dest_edit())
+        entry.bind("<Escape>", lambda e: self.cancel_scan_dest_edit())
+        entry.bind("<FocusOut>", lambda e: self.finish_scan_dest_edit())
+
+        self.scan_inline_entry = (entry, iid)
+
+    def finish_scan_dest_edit(self):
+        if not self.scan_inline_entry:
+            return
+
+        entry, iid = self.scan_inline_entry
+        new_name = entry.get().strip()
+        entry.destroy()
+        self.scan_inline_entry = None
+
+        if not new_name:
+            return
+
+        info = self.scan_item_map.get(iid)
+        if not info:
+            return
+
+        info["dest_name"] = new_name
+        values = list(self.scan_tree.item(iid, "values"))
+        if len(values) >= 5:
+            values[4] = new_name
+            self.scan_tree.item(iid, values=values)
+
+    def cancel_scan_dest_edit(self):
+        if not self.scan_inline_entry:
+            return
+        entry, _ = self.scan_inline_entry
+        entry.destroy()
+        self.scan_inline_entry = None
+
+    def copy_or_move_selected_files(self):
+        dest_folder = self.scan_dest_path.get().strip()
+        if not dest_folder:
+            messagebox.showerror("Destination Required", "Please select a destination folder.")
+            return
+
+        if not os.path.exists(dest_folder):
+            try:
+                os.makedirs(dest_folder, exist_ok=True)
+            except Exception as e:
+                messagebox.showerror("Error", f"Unable to create destination folder:\n{e}")
+                return
+
+        selected = self.scan_tree.selection()
+        if not selected:
+            messagebox.showwarning("No Selection", "Please select one or more records to move/copy.")
+            return
+
+        if self.scan_operation_in_progress:
+            messagebox.showinfo("In Progress", "A copy/move operation is already running.")
+            return
+
+        operation = self.scan_operation.get()
+        add_to_db = self.scan_add_to_db.get()
+        selected_info = [self.scan_item_map.get(iid) for iid in selected if self.scan_item_map.get(iid)]
+
+        self.scan_operation_in_progress = True
+        self._set_folder_scan_controls(False)
+        self.scan_progress_bar.config(maximum=len(selected_info), value=0)
+        self.scan_progress_var.set("Starting transfer...")
+        self.status_var.set("Copy/Move in progress...")
+
+        thread = threading.Thread(
+            target=self._copy_or_move_worker,
+            args=(selected_info, dest_folder, operation, add_to_db),
+            daemon=True
+        )
+        thread.start()
+
+    def _unique_path(self, path):
+        if not os.path.exists(path):
+            return path
+
+        base, ext = os.path.splitext(path)
+        counter = 1
+        candidate = f"{base}_{counter}{ext}"
+        while os.path.exists(candidate):
+            counter += 1
+            candidate = f"{base}_{counter}{ext}"
+        return candidate
+
+    def _set_folder_scan_controls(self, enabled: bool):
+        state = "normal" if enabled else "disabled"
+        for widget in [
+            self.scan_add_to_db_checkbox,
+            self.scan_edit_dest_button,
+            self.scan_copy_move_button,
+            self.scan_dest_path,
+            self.scan_operation,
+            self.scan_match_ext,
+            self.scan_match_size
+        ]:
+            try:
+                if isinstance(widget, tk.Variable):
+                    continue
+                widget.configure(state=state)
+            except Exception:
+                pass
+
+    def _copy_or_move_worker(self, selected_info, dest_folder, operation, add_to_db):
+        moved = 0
+        copied = 0
+        db_added = 0
+        skipped = 0
+        problems = []
+
+        conn = None
+        cur = None
+        if add_to_db:
+            try:
+                conn = self.get_connection()
+                cur = conn.cursor()
+            except Exception as e:
+                self.root.after(0, lambda: self._finish_scan_copy_move(0, 0, 0, 0, [f"DB error: {e}"], len(selected_info)))
+                return
+
+        for idx, info in enumerate(selected_info, start=1):
+            src_path = info["full_path"]
+            ext = info["extension"]
+            dest_base = info.get("dest_name", info.get("name_without_ext", ""))
+            dest_name = f"{dest_base}{ext}"
+            dest_path = os.path.join(dest_folder, dest_name)
+            dest_path = self._unique_path(dest_path)
+
+            try:
+                if operation == "move":
+                    shutil.move(src_path, dest_path)
+                    moved += 1
+                    info["full_path"] = dest_path
+                else:
+                    shutil.copy2(src_path, dest_path)
+                    copied += 1
+            except Exception as e:
+                problems.append(f"{src_path}: {e}")
+                self.root.after(0, lambda i=idx: self._update_scan_progress(i, len(selected_info)))
+                continue
+
+            if add_to_db and cur:
+                dest_storage = detect_storage_id_from_path(dest_path)
+                try:
+                    cur.execute(
+                        "INSERT OR IGNORE INTO Files (file_name, extension, size_bytes, storage_id, creation_date, full_path, year, category) VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            dest_base,
+                            ext,
+                            info["size"],
+                            dest_storage,
+                            info.get("creation_date"),
+                            dest_path,
+                            info.get("year"),
+                            info.get("category")
+                        )
+                    )
+                    if cur.rowcount > 0:
+                        db_added += 1
+                    else:
+                        skipped += 1
+                except sqlite3.IntegrityError:
+                    skipped += 1
+                except Exception as e:
+                    problems.append(f"DB add {dest_path}: {e}")
+
+            self.root.after(0, lambda i=idx: self._update_scan_progress(i, len(selected_info)))
+
+        if conn:
+            conn.commit()
+            conn.close()
+
+        self.root.after(0, lambda: self._finish_scan_copy_move(moved, copied, db_added, skipped, problems, len(selected_info)))
+
+    def _update_scan_progress(self, current, total):
+        self.scan_progress_bar.config(value=current, maximum=total)
+        self.scan_progress_var.set(f"{current}/{total} files processed")
+        self.status_var.set(self.scan_progress_var.get())
+
+    def _finish_scan_copy_move(self, moved, copied, db_added, skipped, problems, total):
+        summary = []
+        if moved:
+            summary.append(f"Moved: {moved}")
+        if copied:
+            summary.append(f"Copied: {copied}")
+        if self.scan_add_to_db.get():
+            summary.append(f"DB added: {db_added}")
+            summary.append(f"Skipped DB: {skipped}")
+        if problems:
+            summary.append(f"Errors: {len(problems)}")
+
+        if summary:
+            messagebox.showinfo("Operation Complete", "\n".join(summary))
+        else:
+            messagebox.showinfo("Operation Complete", "No files were moved or copied.")
+
+        self.scan_operation_in_progress = False
+        self._set_folder_scan_controls(True)
+        self.scan_progress_var.set("Completed")
+        self.status_var.set("Move/Copy completed.")
         value = self.storage_id_var.get().strip()
         return value if value else "UNKNOWN"
 
@@ -3814,7 +4292,21 @@ class FileListerApp:
                 ORDER BY storage_id
             """)
 
-            ids = [r[0] for r in cur.fetchall()]
+            raw_ids = [r[0] for r in cur.fetchall()]
+
+            # Normalize duplicate forms like "LABEL" and "LABEL (D:)" to a single storage ID.
+            normalized = {}
+            for sid in raw_ids:
+                if sid is None:
+                    continue
+                normalized_id = sid.strip()
+                # Collapse "LABEL (D:)" to just "LABEL" when label is present.
+                m = re.match(r"^(.*) \([A-Z]:\)$", normalized_id)
+                if m:
+                    normalized_id = m.group(1).strip()
+                normalized[normalized_id] = normalized_id
+
+            ids = sorted(normalized)
 
             # ---------- SQLite Viewer tab combo ----------
             self.available_storage_ids = ["ALL"] + ids
