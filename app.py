@@ -230,6 +230,7 @@ class FileListerApp:
         self.scan_item_map = {}
         self.scan_inline_entry = None
         self.scan_operation_in_progress = False
+        self._scan_sort_reverse = {}
 
         # SQLite viewer state
         #self.current_db_path = None
@@ -1931,6 +1932,7 @@ class FileListerApp:
             variable=self.scan_match_size
         ).pack(side="left", padx=(10, 0))
 
+        tk.Button(opt_frame, text="Reset", command=self.reset_scan_folder_tab).pack(side="right", padx=(0, 5))
         tk.Button(opt_frame, text="Scan Folder", command=self.scan_folder).pack(side="right")
 
         header_frame = tk.Frame(parent)
@@ -1945,12 +1947,12 @@ class FileListerApp:
 
         cols = ("name", "ext", "size", "storage", "matched", "dest_name")
         self.scan_tree = ttk.Treeview(table_frame, columns=cols, show="headings")
-        self.scan_tree.heading("name", text="Source Name")
-        self.scan_tree.heading("ext", text="Extension")
-        self.scan_tree.heading("size", text="File Size")
-        self.scan_tree.heading("storage", text="Storage ID")
-        self.scan_tree.heading("matched", text="Match Count")
-        self.scan_tree.heading("dest_name", text="Destination Name")
+        self.scan_tree.heading("name", text="Source Name", command=lambda c="name": self.sort_scan_by_column(c))
+        self.scan_tree.heading("ext", text="Extension", command=lambda c="ext": self.sort_scan_by_column(c))
+        self.scan_tree.heading("size", text="File Size", command=lambda c="size": self.sort_scan_by_column(c))
+        self.scan_tree.heading("storage", text="Storage ID", command=lambda c="storage": self.sort_scan_by_column(c))
+        self.scan_tree.heading("matched", text="Match Count", command=lambda c="matched": self.sort_scan_by_column(c))
+        self.scan_tree.heading("dest_name", text="Destination Name", command=lambda c="dest_name": self.sort_scan_by_column(c))
 
         self.scan_tree.column("name", width=260, anchor="w")
         self.scan_tree.column("ext", width=100, anchor="center")
@@ -2007,6 +2009,71 @@ class FileListerApp:
             self.scan_folder_path.set(folder)
             self.status_var.set(f"Selected scan path: {folder}")
 
+    def reset_scan_folder_tab(self):
+        """Clear scan-folder results and restore the tab to its default state."""
+        if hasattr(self, "scan_tree"):
+            self.scan_tree.delete(*self.scan_tree.get_children())
+            try:
+                self.scan_tree.selection_remove(self.scan_tree.selection())
+            except Exception:
+                pass
+
+        if hasattr(self, "scan_item_map"):
+            self.scan_item_map.clear()
+
+        if hasattr(self, "scan_results"):
+            self.scan_results = []
+
+        if hasattr(self, "scan_folder_path"):
+            self.scan_folder_path.set("")
+
+        if hasattr(self, "scan_dest_path"):
+            self.scan_dest_path.set("")
+
+        if hasattr(self, "scan_include_subdirs"):
+            self.scan_include_subdirs.set(True)
+
+        if hasattr(self, "scan_match_ext"):
+            self.scan_match_ext.set(True)
+
+        if hasattr(self, "scan_match_size"):
+            self.scan_match_size.set(False)
+
+        if hasattr(self, "scan_operation"):
+            self.scan_operation.set("copy")
+
+        if hasattr(self, "scan_add_to_db"):
+            self.scan_add_to_db.set(False)
+
+        if hasattr(self, "scan_files_count_var"):
+            self.scan_files_count_var.set("Files: 0")
+
+        if hasattr(self, "scan_matches_count_var"):
+            self.scan_matches_count_var.set("Matched Files: 0")
+
+        if hasattr(self, "scan_progress_var"):
+            self.scan_progress_var.set("")
+
+        if hasattr(self, "scan_progress_bar"):
+            try:
+                self.scan_progress_bar.config(value=0, maximum=100)
+            except Exception:
+                pass
+
+        if hasattr(self, "scan_inline_entry") and self.scan_inline_entry:
+            entry, _ = self.scan_inline_entry
+            try:
+                entry.destroy()
+            except Exception:
+                pass
+            self.scan_inline_entry = None
+
+        if hasattr(self, "scan_operation_in_progress"):
+            self.scan_operation_in_progress = False
+
+        if hasattr(self, "status_var"):
+            self.status_var.set("Scan folder tab reset.")
+
     def scan_folder(self):
         folder = self.scan_folder_path.get()
         if not folder or not os.path.isdir(folder):
@@ -2034,6 +2101,8 @@ class FileListerApp:
             storage_id, match_count = self.find_nearest_db_match(info, use_extension, use_size)
             if match_count > 0:
                 matched += 1
+            info["storage_id"] = storage_id or ""
+            info["match_count"] = match_count
             iid = self.scan_tree.insert(
                 "",
                 "end",
@@ -2041,8 +2110,8 @@ class FileListerApp:
                     info["name_without_ext"],
                     info["extension"],
                     format_size(info["size"]),
-                    storage_id or "",
-                    match_count,
+                    info["storage_id"],
+                    info["match_count"],
                     info["dest_name"]
                 )
             )
@@ -2052,6 +2121,54 @@ class FileListerApp:
         self.scan_files_count_var.set(f"Files: {total}")
         self.scan_matches_count_var.set(f"Matched Files: {matched}")
         self.status_var.set(f"Scanned {total} files. Matches found: {matched}.")
+
+    def refresh_scan_tree(self):
+        self.scan_tree.delete(*self.scan_tree.get_children())
+        self.scan_item_map.clear()
+        for info in self.scan_results:
+            iid = self.scan_tree.insert(
+                "",
+                "end",
+                values=(
+                    info.get("name_without_ext", ""),
+                    info.get("extension", ""),
+                    format_size(info.get("size", 0)),
+                    info.get("storage_id", ""),
+                    info.get("match_count", 0),
+                    info.get("dest_name", "")
+                )
+            )
+            self.scan_item_map[iid] = info
+
+    def sort_scan_by_column(self, col):
+        if not self.scan_results:
+            return
+
+        col_map = {
+            "name": "name_without_ext",
+            "ext": "extension",
+            "size": "size",
+            "storage": "storage_id",
+            "matched": "match_count",
+            "dest_name": "dest_name"
+        }
+        key = col_map.get(col)
+        if not key:
+            return
+
+        reverse = self._scan_sort_reverse.get(col, False)
+
+        def sort_key(info):
+            if col in ("size", "matched"):
+                try:
+                    return int(info.get(key, 0) or 0)
+                except Exception:
+                    return 0
+            return str(info.get(key, "") or "").lower()
+
+        self.scan_results = sorted(self.scan_results, key=sort_key, reverse=not reverse)
+        self._scan_sort_reverse[col] = not reverse
+        self.refresh_scan_tree()
 
     def find_nearest_db_match(self, file_info, use_extension=True, use_size=False):
         if not self.current_db_path or not os.path.exists(self.current_db_path):
