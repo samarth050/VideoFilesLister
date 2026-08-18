@@ -491,6 +491,20 @@ class FileListerApp:
         self.load_movie_detail_view(self.selected_file_id)
         self.load_movie_metadata(self.selected_file_id)
 
+    def copy_selected_searchable_filename(self):
+        selected = self.db_tree.selection()
+        if not selected:
+            return
+
+        filename = self.db_tree.set(selected[0], "Name")
+        searchable_name = Path(filename).stem
+        searchable_name = re.sub(r"[._]+", " ", searchable_name)
+        searchable_name = re.sub(r"\s+\d{4}$", "", searchable_name)
+        searchable_name = re.sub(r"\s+", " ", searchable_name).strip()
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(searchable_name)
+        self.root.update()
 
     def get_connection(self):
         conn = sqlite3.connect(self.current_db_path)
@@ -4568,25 +4582,17 @@ class FileListerApp:
         
         # Create context menu
         context_menu = tk.Menu(self.root, tearoff=False)
+
         context_menu.add_command(
-            label="Copy Filename",
-            command=lambda: self._copy_to_clipboard(filename)
+            label="Copy Searchable Filename",
+            command=self.copy_selected_searchable_filename,
         )
-        
+     
         try:
             context_menu.tk_popup(event.x_root, event.y_root)
         finally:
             context_menu.grab_release()
     
-    def _copy_to_clipboard(self, text):
-        """Copy text to clipboard"""
-        try:
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            self.root.update()  # Keep clipboard in sync
-            messagebox.showinfo("Success", f"Copied to clipboard: {text}")
-        except Exception as e:
-            messagebox.showerror("Error", f"Failed to copy: {e}")
 
     def metadata_dot(self, status):
 
