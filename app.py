@@ -4549,6 +4549,45 @@ class FileListerApp:
         finally:
             self.url_menu.grab_release()
 
+    def _show_db_tree_context_menu(self, event):
+        """Right-click context menu to copy filename from db_tree"""
+        item = self.db_tree.identify_row(event.y)
+        if not item:
+            return
+        
+        # Select the item if not already selected
+        if item not in self.db_tree.selection():
+            self.db_tree.selection_set(item)
+        
+        # Get filename from tags (third element: fname)
+        tags = self.db_tree.item(item, "tags")
+        if not tags or len(tags) < 3:
+            return
+        
+        filename = tags[2]
+        
+        # Create context menu
+        context_menu = tk.Menu(self.root, tearoff=False)
+        context_menu.add_command(
+            label="Copy Filename",
+            command=lambda: self._copy_to_clipboard(filename)
+        )
+        
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
+    
+    def _copy_to_clipboard(self, text):
+        """Copy text to clipboard"""
+        try:
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.root.update()  # Keep clipboard in sync
+            messagebox.showinfo("Success", f"Copied to clipboard: {text}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to copy: {e}")
+
     def metadata_dot(self, status):
 
         if status == "COMPLETE":
@@ -4734,7 +4773,7 @@ class FileListerApp:
 
         self.db_tree_controls = []
 
-        cols = ("No", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
+        cols = ("No", "Name", "Ext", "Size", "Storage", "Year", "Category")
 
         frame = tk.Frame(parent)
         frame.pack(fill="both", expand=True)
@@ -4743,6 +4782,9 @@ class FileListerApp:
         self.db_tree = ttk.Treeview(frame, columns=cols, show="headings", selectmode="extended")
         self.db_tree.bind("<<TreeviewSelect>>", self.on_db_row_select)
         self.db_tree_controls = [self.db_tree]
+        
+        # ✅ RIGHT-CLICK CONTEXT MENU FOR COPY FILENAME
+        self.db_tree.bind("<Button-3>", self._show_db_tree_context_menu)
 
 
         # ✅ HEADINGS + SORT
@@ -4755,7 +4797,6 @@ class FileListerApp:
         self.db_tree.column("Ext", width=70, anchor="center")
         self.db_tree.column("Size", width=100, anchor="e")
         self.db_tree.column("Year", width=70, anchor="center")
-        self.db_tree.column("Path", width=380)
 
         self.db_tree.pack(side="left", fill="both", expand=True)
 
@@ -6104,17 +6145,15 @@ class FileListerApp:
                     ext,
                     format_size(sizeb),
                     storage_id,
-                    format_date(cdate),
-                    path,
                     year if year else "",
                     category if category else ""
                 ),
-                tags=(id_, tag)   # ✔ id first, color tag second
+                tags=(id_, tag, fname)   # ✔ id first, color tag second, filename third for context menu
             )
 
     
     def auto_resize_columns(self, display_rows):
-        cols = ("ID", "Name", "Ext", "Size", "Storage", "Date", "Path", "Year", "Category")
+        cols = ("ID", "Name", "Ext", "Size", "Storage", "Year", "Category")
         maxw = [self._font.measure(c+"  ") for c in cols]
         for row in display_rows:
             for i, cell in enumerate(row):
@@ -6280,10 +6319,8 @@ class FileListerApp:
             "Ext": 2,
             "Size": 3,
             "Storage": 4,
-            "Date": 5,
-            "Path": 6,
-            "Year": 7,
-            "Category": 8
+            "Year": 5,
+            "Category": 6
         }
 
         idx = map_idx.get(col, None)
@@ -6301,21 +6338,6 @@ class FileListerApp:
                     key=lambda x: (x[idx] if x[idx] is not None else 0),
                     reverse=not rev
                 )
-
-            elif col == "Date":
-                def keyd(x):
-                    v = x[idx]
-                    if not v:
-                        return datetime.datetime.min
-                    try:
-                        return datetime.datetime.fromisoformat(v)
-                    except:
-                        try:
-                            return datetime.datetime.strptime(v, "%Y-%m-%d %H:%M:%S")
-                        except:
-                            return datetime.datetime.min
-
-                sorted_rows = sorted(self.all_filtered_rows, key=keyd, reverse=not rev)
 
             else:
                 sorted_rows = sorted(
