@@ -3102,6 +3102,7 @@ class FileListerApp:
         frame.columnconfigure(0, weight=1)
 
         self.missing_online_tree.bind("<Double-1>", lambda e: self.open_selected_missing_online_url())
+        self.missing_online_tree.bind("<Button-3>", self._show_missing_online_tree_context_menu)
 
     def load_missing_online_records(self):
         page_url = self.missing_online_url_var.get().strip()
@@ -3476,6 +3477,43 @@ class FileListerApp:
         self.root.clipboard_clear()
         self.root.clipboard_append(url)
         self.status_var.set("Movie URL copied to clipboard.")
+
+    def copy_selected_missing_online_searchable_filename(self):
+        """Copy the selected To Download name in the SQLite Viewer search format."""
+        selected = self.missing_online_tree.selection()
+        if not selected:
+            return
+
+        filename = self.missing_online_tree.set(selected[0], "Name")
+        searchable_name = Path(filename).stem
+        searchable_name = re.sub(r"[._]+", " ", searchable_name)
+        searchable_name = re.sub(r"\s+\d{4}$", "", searchable_name)
+        searchable_name = re.sub(r"\s+", " ", searchable_name).strip()
+
+        self.root.clipboard_clear()
+        self.root.clipboard_append(searchable_name)
+        self.root.update()
+        self.status_var.set("Searchable filename copied to clipboard.")
+
+    def _show_missing_online_tree_context_menu(self, event):
+        """Show To Download actions for the row under the pointer."""
+        item = self.missing_online_tree.identify_row(event.y)
+        if not item:
+            return
+
+        if item not in self.missing_online_tree.selection():
+            self.missing_online_tree.selection_set(item)
+
+        context_menu = tk.Menu(self.root, tearoff=False)
+        context_menu.add_command(
+            label="Copy Searchable Filename",
+            command=self.copy_selected_missing_online_searchable_filename,
+        )
+
+        try:
+            context_menu.tk_popup(event.x_root, event.y_root)
+        finally:
+            context_menu.grab_release()
 
     def export_missing_online_to_excel(self):
         if not self.current_db_path:
