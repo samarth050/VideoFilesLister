@@ -8,6 +8,38 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
         results = []
         # ✅ Track DVD folders already processed
         dvd_movies = set()
+
+        def add_dvd_movie(dvd_root):
+            """Add one database entry for a DVD folder, regardless of VOB count."""
+            dvd_root = os.path.normpath(dvd_root)
+            if dvd_root in dvd_movies:
+                return
+            try:
+                size = get_folder_size_bytes(dvd_root)
+                cdate = datetime.datetime.fromtimestamp(
+                    os.path.getctime(dvd_root)
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                return
+
+            dvd_movies.add(dvd_root)
+            results.append({
+                "name_without_ext": os.path.basename(dvd_root),
+                "full_path": dvd_root,
+                "extension": "DVD",
+                "size": size,
+                "creation_date": cdate,
+                "year": None,
+                "category": None,
+                "tracked": True
+            })
+
+        def dvd_root_for_vob(directory):
+            """Return the movie folder represented by VOBs in *directory*."""
+            if os.path.basename(directory).casefold() == "video_ts":
+                return os.path.dirname(directory)
+            return directory
+
         def process_file(path, f):
             try:
                 size = os.path.getsize(path)
@@ -47,34 +79,19 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
             for root, dirs, files in os.walk(folder):
 
                 # -------- DVD detection --------
-                if "VIDEO_TS" in dirs:
+                video_ts_dirs = [d for d in dirs if d.casefold() == "video_ts"]
+                if video_ts_dirs:
                     dvd_root = root
-                    movie_name = os.path.basename(dvd_root)
-
-                    if dvd_root not in dvd_movies:
-                        dvd_movies.add(dvd_root)
-
-                        size = get_folder_size_bytes(dvd_root)
-                        cdate = datetime.datetime.fromtimestamp(
-                            os.path.getctime(dvd_root)
-                        ).strftime("%Y-%m-%d %H:%M:%S")
-
-                        results.append({
-                            "name_without_ext": movie_name,
-                            "full_path": dvd_root,
-                            "extension": "DVD",
-                            "size": size,
-                            "creation_date": cdate,
-                            "year": None,
-                            "category": None,
-                            "tracked": True
-                        })
+                    add_dvd_movie(dvd_root)
 
                     # 🚫 Do not descend into VIDEO_TS
-                    dirs[:] = []
-                    continue
+                    dirs[:] = [d for d in dirs if d not in video_ts_dirs]
 
                 # -------- Normal video files --------
+                vob_files = [f for f in files if os.path.splitext(f)[1].lower() == ".vob"]
+                if vob_files:
+                    add_dvd_movie(dvd_root_for_vob(root))
+
                 for f in files:
                     ext = os.path.splitext(f)[1].lower()
 
@@ -92,6 +109,7 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
         # ---- only selected folder ----
         else:
             try:
+                vob_files = []
                 for f in os.listdir(folder):
                     path = os.path.join(folder, f)
                     if not os.path.isfile(path):
@@ -99,11 +117,18 @@ def get_files_info(folder, allowed_video_exts, include_subdirs):
 
                     ext = os.path.splitext(f)[1].lower()
 
+                    if ext == ".vob":
+                        vob_files.append(f)
+                        continue
+
                     # only allowed video files
                     if ext not in allowed_video_exts:
                         continue
 
                     process_file(path, f)
+
+                if vob_files:
+                    add_dvd_movie(dvd_root_for_vob(folder))
 
             except Exception:
                 pass
@@ -186,4 +211,4 @@ def get_drive_label(drive_letter):
             )
             return buf.value
         except Exception:
-            return ""        
+            return ""

@@ -48,6 +48,9 @@ exports/
 temp/
 tmp/
 
+# Tests
+tests/
+
 # Large media files (optional)
 *.mp4
 *.mkv
