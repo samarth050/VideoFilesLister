@@ -897,39 +897,58 @@ class FileListerApp:
         )
         thread.start()
 
+    def _persist_fetched_metadata(self, file_id, url, data):
+        """Save all metadata supplied by a URL, including usable cover files."""
+        category = (data.get("category") or "").strip()
+        description = (data.get("description") or "").strip()
+        images = data.get("images") or []
+
+        year = data.get("year")
+        try:
+            year = int(year) if year else None
+        except (TypeError, ValueError):
+            year = None
+
+        img1_path = self.get_cover_file_path(f"{file_id}_1.jpg")
+        img2_path = self.get_cover_file_path(f"{file_id}_2.jpg")
+        cover1_path = None
+        cover2_path = None
+
+        if len(images) > 0 and self.download_image(images[0], img1_path):
+            cover1_path = self.make_cover_db_path(img1_path)
+        if len(images) > 1 and self.download_image(images[1], img2_path):
+            cover2_path = self.make_cover_db_path(img2_path)
+
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute("""
+                INSERT INTO MovieDetails
+                    (file_id, category, description, cover1_path, cover2_path, metadata_url)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(file_id) DO UPDATE SET
+                    category = excluded.category,
+                    description = excluded.description,
+                    cover1_path = COALESCE(excluded.cover1_path, MovieDetails.cover1_path),
+                    cover2_path = COALESCE(excluded.cover2_path, MovieDetails.cover2_path),
+                    metadata_url = excluded.metadata_url
+            """, (file_id, category, description, cover1_path, cover2_path, url))
+
+            # The file name, size and extension describe the local DVD and
+            # must not be overwritten from a web listing.  Its year and
+            # category are metadata, so update those when the URL provides it.
+            cur.execute(
+                "UPDATE Files SET category=?, year=COALESCE(?, year) WHERE id=?",
+                (category, year, file_id)
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
     def _fetch_metadata_worker(self, file_id, url):
         try:
             data = scrape_movie(url)
-
-            category = data["category"]
-            description = data["description"]
-            images = data["images"]
-
-            img1_path = self.get_cover_file_path(f"{file_id}_1.jpg")
-            img2_path = self.get_cover_file_path(f"{file_id}_2.jpg")
-
-            if len(images) > 0:
-                self.download_image(images[0], img1_path)
-
-            if len(images) > 1:
-                self.download_image(images[1], img2_path)
-
-            conn = self.get_connection()
-            cur = conn.cursor()
-
-            cur.execute(MOVIE_DETAILS_INSERT, (
-                file_id,
-                category,
-                description,
-                self.make_cover_db_path(img1_path),
-                self.make_cover_db_path(img2_path),
-                url
-            ))
-
-            cur.execute(UPDATE_FILES_CATEGORY, (category, file_id))
-
-            conn.commit()
-            conn.close()
+            self._persist_fetched_metadata(file_id, url, data)
 
             # UI update safely
             self.root.after(0, lambda: self._fetch_metadata_ui_update(file_id))

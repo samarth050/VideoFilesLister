@@ -155,16 +155,20 @@ def scrape_movie(url, timeout=15):
     images = []
 
     if content:
-        for img in content.select("img[src]"):
-
-            src = img.get("src")
+        for img in content.find_all("img"):
+            # WordPress pages commonly lazy-load their covers, so the actual
+            # image may be in data-src rather than src.
+            src = img.get("data-src") or img.get("data-lazy-src") or img.get("src")
             if not src:
                 continue
 
-            if not src.lower().endswith((".jpg",".jpeg",".png")):
+            src = urljoin(url, src)
+            image_path = urlparse(src).path.lower()
+            if not image_path.endswith((".jpg", ".jpeg", ".png", ".webp")):
                 continue
 
-            src = re.sub(r"-\d+x\d+(?=\.(jpg|jpeg|png))","",src)
+            src = re.sub(r"-\d+x\d+(?=\.(jpg|jpeg|png|webp)(?:$|[?#]))", "", src,
+                         flags=re.IGNORECASE)
 
             if any(x in src.lower() for x in ["logo","avatar","icon","banner","ads"]):
                 continue
