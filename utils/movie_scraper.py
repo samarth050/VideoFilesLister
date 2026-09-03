@@ -55,6 +55,8 @@ KNOWN_CATEGORIES = [
     "Crime, Incest",
     "Crime",
     "Drama",
+    "Documentary",
+    "Fantasy",
     "Horror, Incest",
     "Horror",
     "Mystery",
