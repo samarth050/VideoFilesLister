@@ -262,6 +262,8 @@ class FileListerApp:
         # --- Gallery Pagination State ---
         self.gallery_offset = 0
         self.gallery_limit = 15   # 15 per page (safe for 300+)
+        self.gallery_storage_id_var = tk.StringVar(value="All")
+        self.gallery_storage_ids = ["All"]
         # --- Duplicate pagination ---
         self.dup_all_rows = []
         self.dup_current_page = 0
@@ -309,7 +311,7 @@ class FileListerApp:
         ttk.Separator(self.gallery_tab, orient="horizontal").pack(fill="x", pady=5)
 
         # ==============================
-        # CATEGORY FILTER (CENTERED)
+        # GALLERY FILTERS (CENTERED)
         # ==============================
         filter_frame = ttk.Frame(self.gallery_tab)
         filter_frame.pack(pady=5)
@@ -329,6 +331,23 @@ class FileListerApp:
         self.gallery_category_combo.bind(
             "<<ComboboxSelected>>",
             self.on_gallery_category_changed
+        )
+
+        ttk.Label(filter_frame, text="Storage ID:", font=("Segoe UI", 10, "bold")).pack(
+            side="left", padx=(16, 0)
+        )
+
+        self.gallery_storage_id_combo = ttk.Combobox(
+            filter_frame,
+            textvariable=self.gallery_storage_id_var,
+            state="readonly",
+            width=25,
+            values=self.gallery_storage_ids,
+        )
+        self.gallery_storage_id_combo.pack(side="left", padx=5)
+        self.gallery_storage_id_combo.bind(
+            "<<ComboboxSelected>>",
+            self.on_gallery_storage_id_changed
         )
 
         # ==============================
@@ -393,6 +412,12 @@ class FileListerApp:
         self.load_more_gallery()
 
     def on_gallery_category_changed(self, event=None):
+        self._reload_gallery_for_filter_change()
+
+    def on_gallery_storage_id_changed(self, event=None):
+        self._reload_gallery_for_filter_change()
+
+    def _reload_gallery_for_filter_change(self):
         self.gallery_offset = 0
 
         for widget in self.gallery_frame.winfo_children():
@@ -410,29 +435,31 @@ class FileListerApp:
             cur = conn.cursor()
 
             selected_category = self.gallery_category_var.get()
+            selected_storage_id = self.gallery_storage_id_var.get()
 
-            if selected_category == "All":
-                query = """
-                    SELECT file_id, cover1_path
-                    FROM MovieDetails
-                    WHERE cover1_path IS NOT NULL
-                    AND cover1_path != ''
-                    LIMIT ? OFFSET ?
-                """
-                params = (self.gallery_limit, self.gallery_offset)
+            # Storage ID belongs to Files, while covers belong to MovieDetails.
+            # Join the two tables so both Gallery filters apply to the same record.
+            conditions = [
+                "m.cover1_path IS NOT NULL",
+                "m.cover1_path != ''",
+            ]
+            params = []
+            if selected_category != "All":
+                conditions.append("m.category = ?")
+                params.append(selected_category)
+            if selected_storage_id != "All":
+                conditions.append("f.storage_id = ?")
+                params.append(selected_storage_id)
 
-            else:
-                query = """
-                    SELECT file_id, cover1_path
-                    FROM MovieDetails
-                    WHERE cover1_path IS NOT NULL
-                    AND cover1_path != ''
-                    AND category = ?
-                    LIMIT ? OFFSET ?
-                """
-                params = (selected_category,
-                        self.gallery_limit,
-                        self.gallery_offset)
+            query = f"""
+                SELECT m.file_id, m.cover1_path
+                FROM MovieDetails AS m
+                INNER JOIN Files AS f ON f.id = m.file_id
+                WHERE {' AND '.join(conditions)}
+                ORDER BY m.file_id DESC
+                LIMIT ? OFFSET ?
+            """
+            params.extend((self.gallery_limit, self.gallery_offset))
 
             cur.execute(query, params)
 
@@ -1705,6 +1732,7 @@ class FileListerApp:
 
         elif selected_tab == "Gallery":
             self.load_gallery_categories()
+            self.load_storage_ids_from_db()
             self.load_gallery()
 
         elif selected_tab == "Movie Details":
@@ -4495,6 +4523,15 @@ class FileListerApp:
                 normalized[normalized_id] = normalized_id
 
             ids = sorted(normalized)
+
+            # Gallery filtering uses the stored value directly, so retain the
+            # exact distinct values rather than the display-normalized list.
+            self.gallery_storage_ids = ["All"] + raw_ids
+            if hasattr(self, "gallery_storage_id_combo"):
+                current_gallery_storage_id = self.gallery_storage_id_var.get()
+                self.gallery_storage_id_combo["values"] = self.gallery_storage_ids
+                if current_gallery_storage_id not in self.gallery_storage_ids:
+                    self.gallery_storage_id_var.set("All")
 
             # ---------- SQLite Viewer tab combo ----------
             self.available_storage_ids = ["ALL"] + ids
