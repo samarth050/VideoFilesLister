@@ -47,6 +47,42 @@ class MovieScraperCategoryTests(unittest.TestCase):
             self._scrape_category("Documentary")["category"], "Documentary"
         )
 
+    def test_scrape_adult_film_database_video_page(self):
+        html = """
+            <html><body>
+                <h1 class="w3-xxlarge" itemprop="name">
+                    Private Black Label 30 - Scottish Loveknot
+                </h1>
+                <div>Studio: Private (2003)</div>
+                <article><p itemprop="description">
+                    A complete description from the video record.
+                </p></article>
+                <div class="w3-white">
+                    <div class="w3-theme-l4 w3-padding">Genres</div>
+                    <div class="w3-container"><p>
+                        <a href="/browse.cfm?cf=European"><span>European</span></a>
+                        <a href="/browse.cfm?cf=Feature"><span>Feature</span></a>
+                    </p></div>
+                </div>
+                <img src="/Graphics/Boxes/200/Front/67376.jpg">
+                <img src="/Graphics/Boxes/200/Back/67376.jpg">
+                <img src="/Graphics/PornStars/example_1.jpg">
+            </body></html>
+        """
+        with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html)):
+            data = scrape_movie(
+                "https://www.adultfilmdatabase.com/video/67376/private-black-label-30/"
+            )
+
+        self.assertEqual(data["name"], "Private Black Label 30 - Scottish Loveknot")
+        self.assertEqual(data["year"], "2003")
+        self.assertEqual(data["category"], "European, Feature")
+        self.assertEqual(data["description"], "A complete description from the video record.")
+        self.assertEqual(data["images"], [
+            "https://www.adultfilmdatabase.com/Graphics/Boxes/200/Front/67376.jpg",
+            "https://www.adultfilmdatabase.com/Graphics/Boxes/200/Back/67376.jpg",
+        ])
+
 
 if __name__ == "__main__":
     unittest.main()

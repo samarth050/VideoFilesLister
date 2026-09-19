@@ -104,6 +104,12 @@ def scrape_movie(url, timeout=15):
 
     soup = BeautifulSoup(r.text, "html.parser")
 
+    # Adult Film Database has a distinct, structured page format.  Dispatch
+    # only for that host so the existing Rarelust parsing remains unchanged.
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if host == "adultfilmdatabase.com":
+        return _scrape_adultfilmdatabase_movie(url, soup)
+
     # -------- Name + Year --------
     slug = urlparse(url).path.strip("/")
     m = re.search(r"(.+)-(\d{4})$", slug)
@@ -195,6 +201,63 @@ def scrape_movie(url, timeout=15):
         "images": images,
         "size_text": size_info["size_text"],
         "size_bytes": size_info["size_bytes"],
+    }
+
+
+def _scrape_adultfilmdatabase_movie(url, soup):
+    """Extract metadata and front/back cover art from an Adult Film Database video page."""
+    title = soup.select_one("h1[itemprop='name'], h1")
+    name = title.get_text(" ", strip=True) if title else ""
+
+    # AFD places the release year after the studio name, e.g. "Studio: Private
+    # (2003)".  Limit the search to that label so years in the description do
+    # not override the release year.
+    studio_text = ""
+    for node in soup.find_all(string=re.compile(r"^\s*Studio\s*:")):
+        studio_text = node.parent.get_text(" ", strip=True)
+        if studio_text:
+            break
+    year_match = re.search(r"\b((?:19|20)\d{2})\b", studio_text)
+    year = year_match.group(1) if year_match else ""
+
+    description_node = soup.select_one("[itemprop='description']")
+    description = description_node.get_text(" ", strip=True) if description_node else ""
+
+    # Genres appear as tagged links in the panel headed "Genres".  Keep the
+    # site's labels instead of forcing them into the Rarelust category list.
+    category = ""
+    genres_heading = soup.find(
+        lambda tag: tag.name == "div" and tag.get_text(" ", strip=True) == "Genres"
+    )
+    if genres_heading:
+        genres_container = genres_heading.find_next_sibling("div")
+        genres = [
+            tag.get_text(" ", strip=True)
+            for tag in genres_container.select("a span")
+            if tag.get_text(" ", strip=True)
+        ] if genres_container else []
+        category = ", ".join(dict.fromkeys(genres))
+
+    images = []
+    for image in soup.find_all("img"):
+        src = image.get("data-src") or image.get("data-lazy-src") or image.get("src")
+        if not src:
+            continue
+        absolute_src = urljoin(url, src)
+        image_path = urlparse(absolute_src).path.lower()
+        if not re.search(r"/graphics/boxes/[^/]+/(?:front|back)/[^/]+\.(?:jpg|jpeg|png|webp)$", image_path):
+            continue
+        if absolute_src not in images:
+            images.append(absolute_src)
+
+    return {
+        "name": name,
+        "year": year,
+        "category": category,
+        "description": description,
+        "images": images[:2],
+        "size_text": "",
+        "size_bytes": None,
     }
 """def scrape_movie(url, timeout=15):
     headers = {
