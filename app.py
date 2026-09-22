@@ -45,11 +45,48 @@ from typing import Any, Dict, Tuple, Optional
 
 def get_app_dir():
     if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            return Path(sys._MEIPASS)
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
 
 APP_DIR = get_app_dir()
+
+
+def get_icon_path():
+    base_dirs = []
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            base_dirs.append(Path(sys._MEIPASS))
+        base_dirs.append(Path(sys.executable).resolve().parent)
+    base_dirs.append(Path(__file__).resolve().parent)
+
+    for base_dir in base_dirs:
+        for candidate in [base_dir / "FileLister.ico", base_dir / "assets" / "FileLister.ico"]:
+            if candidate.exists():
+                return str(candidate)
+    return str((base_dirs[-1]) / "FileLister.ico")
+
+
+def set_window_icon(window):
+    if window is None:
+        return
+
+    icon_path = get_icon_path()
+    if not Path(icon_path).exists():
+        return
+
+    try:
+        window.iconbitmap(str(icon_path))
+    except Exception:
+        try:
+            window._app_icon_photo = tk.PhotoImage(file=str(icon_path))
+            window.iconphoto(True, window._app_icon_photo)
+        except Exception:
+            pass
+
+
 COVERS_DIR = str(APP_DIR / "covers")
 os.makedirs(COVERS_DIR, exist_ok=True)
 
@@ -199,6 +236,7 @@ class FileListerApp:
         self.root = root
         self.root.title("Video File Lister")
         self.root.geometry("1280x820")
+        set_window_icon(self.root)
 
         # Allowed video types
         self.allowed_video_exts = {

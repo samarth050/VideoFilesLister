@@ -27,6 +27,38 @@ import pandas as pd
 from pathlib import Path
 import datetime
 from collections import defaultdict
+
+
+def get_icon_path():
+    base_dir = Path(__file__).resolve().parent
+    candidates = [
+        base_dir / "FileLister.ico",
+        base_dir / "assets" / "FileLister.ico",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return str(candidate)
+    return str(base_dir / "FileLister.ico")
+
+
+def set_window_icon(window):
+    if window is None:
+        return
+
+    icon_path = get_icon_path()
+    if not Path(icon_path).exists():
+        return
+
+    try:
+        window.iconbitmap(str(icon_path))
+    except Exception:
+        try:
+            window._app_icon_photo = tk.PhotoImage(file=str(icon_path))
+            window.iconphoto(True, window._app_icon_photo)
+        except Exception:
+            pass
+
+
 class FileListerApp:
     CONFIG_FILE = "app_settings.json"
 
@@ -34,6 +66,7 @@ class FileListerApp:
         self.root = root
         self.root.title("Video File Lister")
         self.root.geometry("1280x820")
+        set_window_icon(self.root)
 
         # Allowed video types
         self.allowed_video_exts = {
@@ -702,5 +735,6 @@ class FileListerApp:
             messagebox.showerror("Error", f"Export failed: {e}")
 if __name__ == "__main__":
     root = tk.Tk()
+    set_window_icon(root)
     app = FileListerApp(root)
     root.mainloop()
