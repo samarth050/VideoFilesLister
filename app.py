@@ -45,8 +45,8 @@ from typing import Any, Dict, Tuple, Optional
 
 def get_app_dir():
     if getattr(sys, "frozen", False):
-        if hasattr(sys, "_MEIPASS"):
-            return Path(sys._MEIPASS)
+        # User data must live beside a one-file executable, not in its
+        # temporary PyInstaller extraction directory.
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
 
@@ -320,6 +320,9 @@ class FileListerApp:
         if not os.path.exists(self.current_db_path):
             init_db(self.current_db_path, fresh=True)
             self.load_db_records()
+        else:
+            # Upgrade older databases without deleting their file records.
+            init_db(self.current_db_path)
                 # Load settings
 
         # Build UI here (tabs, combo boxes, etc.)
@@ -590,15 +593,20 @@ class FileListerApp:
         if candidate.is_absolute():
             return str(candidate)
 
-        cwd_path = (Path.cwd() / candidate).resolve()
-        if cwd_path.exists():
-            return str(cwd_path)
+        search_roots = [
+            Path(self.app_dir),
+            Path(self.app_dir).parent,
+            Path(__file__).resolve().parent,
+            Path.cwd(),
+        ]
 
-        app_path = (self.app_dir / candidate).resolve()
-        if app_path.exists():
-            return str(app_path)
+        for base in search_roots:
+            resolved = (base / candidate).resolve()
+            if resolved.exists():
+                return str(resolved)
 
-        return str(app_path)
+        preferred = (Path(self.app_dir) / candidate).resolve()
+        return str(preferred)
 
     def make_portable_path(self, path):
         if not path:
@@ -1741,6 +1749,12 @@ class FileListerApp:
                         init_db(self.current_db_path, fresh=True)
                     except Exception as e:
                         messagebox.showerror("Database Error", f"Failed to create database:\n{e}")
+                        return
+                else:
+                    try:
+                        init_db(self.current_db_path)
+                    except Exception as e:
+                        messagebox.showerror("Database Error", f"Failed to initialize database:\n{e}")
                         return
                 # Only reload DB when necessary: first run, DB path changed,
                 # DB file modified externally, or a refresh was requested.
@@ -5650,6 +5664,8 @@ class FileListerApp:
         self.current_db_path = self.resolve_app_path(db_path)
         self.save_settings({"last_db_path": self.current_db_path})
         try:
+                # Add tables introduced by newer versions without resetting data.
+                init_db(self.current_db_path)
                 ensure_global_unique_index(self.current_db_path)
         except Exception as e:
                  messagebox.showerror("Uniqueness Error", f"Failed to ensure uniqueness:\n{e}")
@@ -6130,8 +6146,12 @@ class FileListerApp:
         self.status_var.set("Loading database records...")
         self._start_db_loading_indicator()
 
+        selected_sid = self.selected_storage_filter.get()
+        meta_filter = getattr(self, "meta_filter_var", tk.StringVar(value="All")).get()
+
         thread = threading.Thread(
             target=self._load_db_records_worker,
+            args=(selected_sid, meta_filter),
             daemon=True
         )
         thread.start()
@@ -6180,7 +6200,7 @@ class FileListerApp:
             except Exception:
                 pass
 
-    def _load_db_records_worker(self):
+    def _load_db_records_worker(self, selected_sid, meta_filter):
         try:
             self.repair_metadata_integrity()
             conn = self.get_connection()
@@ -6189,9 +6209,6 @@ class FileListerApp:
             # Ensure metadata status view exists
             cur.execute(DROP_METADATA_VIEW)
             cur.execute(CREATE_METADATA_VIEW)
-            selected_sid = self.selected_storage_filter.get()
-
-            meta_filter = getattr(self, "meta_filter_var", tk.StringVar(value="All")).get()
 
             query = SELECT_METADATA_VIEW
             params = []
@@ -6219,7 +6236,7 @@ class FileListerApp:
 
             self.root.after(0, lambda: self._finish_load_db_records(rows))
         except Exception as e:
-            self.root.after(0, lambda: self._load_db_records_error(e))
+            self.root.after(0, lambda error=e: self._load_db_records_error(error))
 
     def _finish_load_db_records(self, rows):
         self.db_load_in_progress = False
