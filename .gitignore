@@ -75,6 +75,7 @@ app_settings.json
 
 # Ignore test cache
 .pytest_cache/
+.pytest-theme-tmp/
 
 # Ignore notebook checkpoints
 .ipynb_checkpoints/

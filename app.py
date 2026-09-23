@@ -312,6 +312,7 @@ class FileListerApp:
         self.cover1_local_path = tk.StringVar()
         self.cover2_local_path = tk.StringVar()
 
+        self.configure_theme()
         self.setup_ui()
         self.root.protocol("WM_DELETE_WINDOW", self.on_app_close)
 
@@ -1681,6 +1682,43 @@ class FileListerApp:
         )
         #self.detail_description = tk.Text(parent,font=("Segoe UI", 14), height=8, wrap="word",state="disabled")
         self.detail_description.pack(fill="both", expand=True, padx=20, pady=10)
+
+    def configure_theme(self):
+        """Apply the shared application palette before creating widgets."""
+        colors = {
+            "background": "#e8f0f5",
+            "surface": "#ffffff",
+            "text": "#20313d",
+            "accent": "#2f6f8f",
+            "accent_active": "#245a75",
+            "border": "#b8c9d3",
+        }
+
+        self.root.configure(background=colors["background"])
+        self.root.option_add("*Background", colors["background"])
+        self.root.option_add("*Foreground", colors["text"])
+        self.root.option_add("*selectBackground", colors["accent"])
+        self.root.option_add("*selectForeground", colors["surface"])
+        self.root.option_add("*insertBackground", colors["text"])
+
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure("TFrame", background=colors["background"])
+        style.configure("TLabel", background=colors["background"], foreground=colors["text"])
+        style.configure("TLabelframe", background=colors["background"], bordercolor=colors["border"])
+        style.configure("TLabelframe.Label", background=colors["background"], foreground=colors["text"])
+        style.configure("TCheckbutton", background=colors["background"], foreground=colors["text"])
+        style.configure("TRadiobutton", background=colors["background"], foreground=colors["text"])
+        style.configure("TButton", background=colors["accent"], foreground=colors["surface"], bordercolor=colors["border"])
+        style.map("TButton", background=[("active", colors["accent_active"])])
+        style.configure("TEntry", fieldbackground=colors["surface"], foreground=colors["text"])
+        style.configure("TCombobox", fieldbackground=colors["surface"], foreground=colors["text"])
+        style.configure("Treeview", background=colors["surface"], fieldbackground=colors["surface"], foreground=colors["text"])
+        style.configure("Treeview.Heading", background=colors["accent"], foreground=colors["surface"])
+        style.map("Treeview", background=[("selected", colors["accent"])], foreground=[("selected", colors["surface"])])
+        style.configure("TNotebook", background=colors["background"], bordercolor=colors["border"])
+        style.configure("TNotebook.Tab", background=colors["border"], foreground=colors["text"])
+        style.map("TNotebook.Tab", background=[("selected", colors["surface"])])
 
     def setup_ui(self):
         self.notebook = ttk.Notebook(self.root)
