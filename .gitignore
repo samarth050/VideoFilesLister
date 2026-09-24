@@ -26,7 +26,6 @@ covers/
 VideoFiles.db
 
 # PyInstaller
-*.spec
 
 # SQLite temporary files
 *.db-wal
@@ -79,3 +78,9 @@ app_settings.json
 
 # Ignore notebook checkpoints
 .ipynb_checkpoints/
+
+# Distribution archives
+*.zip
+# FileLister application assets
+!assets/
+!assets/**/*.png

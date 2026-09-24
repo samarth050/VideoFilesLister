@@ -53,6 +53,15 @@ def get_app_dir():
 
 APP_DIR = get_app_dir()
 
+# Runtime resource directory:
+# - normal Python run: project folder
+# - PyInstaller one-file EXE: temporary extraction directory (_MEIPASS)
+# User data/configuration continues to live beside the EXE via APP_DIR.
+if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
+    RESOURCE_DIR = Path(sys._MEIPASS)
+else:
+    RESOURCE_DIR = APP_DIR
+
 
 def get_icon_path():
     base_dirs = []
@@ -234,8 +243,9 @@ class FileListerApp:
         )
 
         self.root = root
-        self.root.title("Video File Lister")
-        self.root.geometry("1280x820")
+        self.root.title("FileLister Portable")
+        self.root.geometry("1650x920")
+        self.root.minsize(1200, 700)
         set_window_icon(self.root)
 
         # Allowed video types
@@ -1684,65 +1694,358 @@ class FileListerApp:
         self.detail_description.pack(fill="both", expand=True, padx=20, pady=10)
 
     def configure_theme(self):
-        """Apply the shared application palette before creating widgets."""
+        """Configure the FileLister Portable visual theme.
+
+        This method is intentionally limited to presentation/styling.  It does
+        not alter database, scanning, gallery, metadata, duplicate-analysis,
+        export, or update behaviour.
+        """
         colors = {
-            "background": "#e8f0f5",
-            "surface": "#ffffff",
-            "text": "#20313d",
-            "accent": "#2f6f8f",
-            "accent_active": "#245a75",
-            "border": "#b8c9d3",
+            "navy": "#075A9C",
+            "blue": "#0D6EBD",
+            "blue_dark": "#07518D",
+            "blue_hover": "#1685D4",
+            "background": "#EAF4FC",
+            "surface": "#FFFFFF",
+            "surface_blue": "#F2F8FD",
+            "text": "#123B60",
+            "text_dark": "#0B3152",
+            "text_light": "#FFFFFF",
+            "border": "#A8CBE5",
+            "border_light": "#D5E7F4",
+            "green": "#55B91F",
+            "green_dark": "#429A17",
+            "status": "#075A9C",
         }
+        self.colors = colors
 
         self.root.configure(background=colors["background"])
         self.root.option_add("*Background", colors["background"])
         self.root.option_add("*Foreground", colors["text"])
-        self.root.option_add("*selectBackground", colors["accent"])
+        self.root.option_add("*selectBackground", colors["blue"])
         self.root.option_add("*selectForeground", colors["surface"])
         self.root.option_add("*insertBackground", colors["text"])
 
         style = ttk.Style(self.root)
-        style.theme_use("clam")
+        try:
+            style.theme_use("clam")
+        except tk.TclError:
+            pass
+
         style.configure("TFrame", background=colors["background"])
-        style.configure("TLabel", background=colors["background"], foreground=colors["text"])
-        style.configure("TLabelframe", background=colors["background"], bordercolor=colors["border"])
-        style.configure("TLabelframe.Label", background=colors["background"], foreground=colors["text"])
-        style.configure("TCheckbutton", background=colors["background"], foreground=colors["text"])
-        style.configure("TRadiobutton", background=colors["background"], foreground=colors["text"])
-        style.configure("TButton", background=colors["accent"], foreground=colors["surface"], bordercolor=colors["border"])
-        style.map("TButton", background=[("active", colors["accent_active"])])
-        style.configure("TEntry", fieldbackground=colors["surface"], foreground=colors["text"])
-        style.configure("TCombobox", fieldbackground=colors["surface"], foreground=colors["text"])
-        style.configure("Treeview", background=colors["surface"], fieldbackground=colors["surface"], foreground=colors["text"])
-        style.configure("Treeview.Heading", background=colors["accent"], foreground=colors["surface"])
-        style.map("Treeview", background=[("selected", colors["accent"])], foreground=[("selected", colors["surface"])])
-        style.configure("TNotebook", background=colors["background"], bordercolor=colors["border"])
-        style.configure("TNotebook.Tab", background=colors["border"], foreground=colors["text"])
-        style.map("TNotebook.Tab", background=[("selected", colors["surface"])])
+        style.configure("Main.TFrame", background=colors["background"])
+        style.configure("Card.TFrame", background=colors["surface"])
+
+        style.configure(
+            "TLabel",
+            background=colors["background"],
+            foreground=colors["text"],
+            font=("Segoe UI", 9)
+        )
+        style.configure(
+            "Header.TLabel",
+            background=colors["navy"],
+            foreground=colors["text_light"],
+            font=("Segoe UI", 20, "bold")
+        )
+        style.configure(
+            "HeaderSub.TLabel",
+            background=colors["navy"],
+            foreground="#DCEEFF",
+            font=("Segoe UI", 11)
+        )
+        style.configure(
+            "TButton",
+            background=colors["surface"],
+            foreground=colors["text_dark"],
+            font=("Segoe UI", 9, "bold"),
+            padding=(12, 7),
+            borderwidth=1,
+            relief="solid",
+            bordercolor=colors["border"]
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("active", colors["surface_blue"]),
+                ("pressed", "#DCEEFF"),
+                ("disabled", "#EEF4F8")
+            ],
+            foreground=[
+                ("disabled", "#8FA8BC"),
+                ("!disabled", colors["text_dark"])
+            ]
+        )
+        style.configure(
+            "Green.TButton",
+            background=colors["green"],
+            foreground=colors["text_light"],
+            font=("Segoe UI", 9, "bold"),
+            padding=(12, 7),
+            borderwidth=1,
+            relief="solid",
+            bordercolor="#4A9D19"
+        )
+        style.map(
+            "Green.TButton",
+            background=[
+                ("active", colors["green_dark"]),
+                ("pressed", colors["green_dark"])
+            ],
+            foreground=[("!disabled", colors["text_light"])]
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=colors["surface"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            padding=6
+        )
+        style.configure(
+            "TCombobox",
+            fieldbackground=colors["surface"],
+            background=colors["surface"],
+            foreground=colors["text"],
+            bordercolor=colors["border"],
+            lightcolor=colors["border"],
+            darkcolor=colors["border"],
+            padding=5
+        )
+        style.map(
+            "TCombobox",
+            fieldbackground=[("readonly", colors["surface"])],
+            foreground=[("readonly", colors["text"])]
+        )
+        style.configure(
+            "Treeview",
+            background=colors["surface"],
+            fieldbackground=colors["surface"],
+            foreground=colors["text"],
+            rowheight=28,
+            bordercolor=colors["border_light"],
+            font=("Segoe UI", 9)
+        )
+        style.configure(
+            "Treeview.Heading",
+            background=colors["blue_dark"],
+            foreground=colors["surface"],
+            font=("Segoe UI", 9, "bold"),
+            padding=(7, 7)
+        )
+        style.map(
+            "Treeview",
+            background=[("selected", colors["blue"])],
+            foreground=[("selected", colors["surface"])]
+        )
+        style.configure(
+            "TNotebook",
+            background=colors["navy"],
+            borderwidth=0,
+            tabmargins=(2, 2, 2, 0)
+        )
+        style.configure(
+            "TNotebook.Tab",
+            background=colors["blue_dark"],
+            foreground=colors["surface"],
+            font=("Segoe UI", 9, "bold"),
+            padding=(14, 9),
+            borderwidth=0
+        )
+        style.map(
+            "TNotebook.Tab",
+            background=[
+                ("selected", colors["surface"]),
+                ("active", colors["blue_hover"])
+            ],
+            foreground=[
+                ("selected", colors["blue_dark"]),
+                ("active", colors["surface"])
+            ]
+        )
+        style.configure(
+            "TLabelframe",
+            background=colors["surface"],
+            foreground=colors["text_dark"],
+            bordercolor=colors["border"],
+            relief="solid",
+            borderwidth=1
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=colors["surface"],
+            foreground=colors["text_dark"],
+            font=("Segoe UI", 10, "bold")
+        )
+        style.configure(
+            "TCheckbutton",
+            background=colors["background"],
+            foreground=colors["text_dark"],
+            font=("Segoe UI", 9)
+        )
+        style.map("TCheckbutton", background=[("active", colors["background"])])
+        style.configure(
+            "TRadiobutton",
+            background=colors["background"],
+            foreground=colors["text_dark"],
+            font=("Segoe UI", 9)
+        )
+        style.configure(
+            "Horizontal.TProgressbar",
+            troughcolor=colors["border_light"],
+            background=colors["blue"],
+            bordercolor=colors["border_light"],
+            lightcolor=colors["blue"],
+            darkcolor=colors["blue"]
+        )
 
     def setup_ui(self):
+        """Build the application chrome and preserve all existing tabs."""
+
+        colors = self.colors
+
+        # -------------------------------------------------------------
+        # Branded application header
+        # -------------------------------------------------------------
+        self.header_frame = tk.Frame(
+            self.root,
+            bg=colors["navy"],
+            height=62
+        )
+        self.header_frame.pack(fill="x", side="top")
+        self.header_frame.pack_propagate(False)
+
+        header_logo_path = RESOURCE_DIR / "assets" / "FileLister_header.png"
+        self._header_logo = None
+        if header_logo_path.exists():
+            try:
+                logo = Image.open(header_logo_path).convert("RGBA")
+                logo.thumbnail((58, 46), Image.Resampling.LANCZOS)
+                self._header_logo = ImageTk.PhotoImage(logo)
+                tk.Label(
+                    self.header_frame,
+                    image=self._header_logo,
+                    bg=colors["navy"],
+                    bd=0
+                ).pack(side="left", padx=(12, 8), pady=7)
+            except Exception:
+                pass
+
+        title_frame = tk.Frame(self.header_frame, bg=colors["navy"])
+        title_frame.pack(side="left", fill="y")
+
+        tk.Label(
+            title_frame,
+            text="FileLister Portable",
+            bg=colors["navy"],
+            fg=colors["text_light"],
+            font=("Segoe UI", 20, "bold")
+        ).pack(side="left", pady=(7, 0))
+
+        tk.Label(
+            title_frame,
+            text="  |  Video File Manager",
+            bg=colors["navy"],
+            fg="#DCEEFF",
+            font=("Segoe UI", 11)
+        ).pack(side="left", pady=(10, 0))
+
+        tk.Label(
+            self.header_frame,
+            text="Scan   •   Organize   •   Discover   •   Manage",
+            bg=colors["navy"],
+            fg="#EAF5FF",
+            font=("Segoe UI", 10, "italic")
+        ).pack(side="right", padx=28, pady=(10, 0))
+
+        # -------------------------------------------------------------
+        # Branded status bar is packed before the expandable notebook so
+        # it always remains visible at the bottom of the window.
+        # -------------------------------------------------------------
+        self.status_var = tk.StringVar(value="Ready")
+        self.db_loading_var = tk.StringVar()
+        self.db_loading_running = False
+        self.db_loading_dot_count = 0
+
+        status_frame = tk.Frame(
+            self.root,
+            bg=colors["status"],
+            height=30
+        )
+        status_frame.pack(fill="x", side="bottom")
+        status_frame.pack_propagate(False)
+
+        tk.Label(
+            status_frame,
+            textvariable=self.status_var,
+            bg=colors["status"],
+            fg=colors["text_light"],
+            font=("Segoe UI", 9),
+            anchor="w"
+        ).pack(side="left", fill="x", expand=True, padx=10)
+
+        tk.Label(
+            status_frame,
+            textvariable=self.db_loading_var,
+            bg=colors["status"],
+            fg="#DCEEFF",
+            font=("Segoe UI", 9),
+            anchor="e"
+        ).pack(side="right", padx=10)
+
+        tk.Label(
+            status_frame,
+            text="FileLister Portable  |  v1.0",
+            bg=colors["status"],
+            fg="#EAF5FF",
+            font=("Segoe UI", 9),
+            anchor="e"
+        ).pack(side="right", padx=(8, 12))
+
+        # -------------------------------------------------------------
+        # Existing functional notebook - tabs are retained unchanged.
+        # -------------------------------------------------------------
         self.notebook = ttk.Notebook(self.root)
-        self.notebook.pack(fill="both", expand=True)
+        self.notebook.pack(fill="both", expand=True, padx=0, pady=0)
 
-        main_tab = ttk.Frame(self.notebook)
-        scan_tab = ttk.Frame(self.notebook)
-        stats_tab = ttk.Frame(self.notebook)
-        db_tab = ttk.Frame(self.notebook)
-        self.gallery_tab = ttk.Frame(self.notebook)
-        self.movie_details_tab = ttk.Frame(self.notebook)
-        self.update_tab = ttk.Frame(self.notebook)
-        self.missing_online_tab = ttk.Frame(self.notebook)
-        dup_tab = ttk.Frame(self.notebook)
+        main_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        scan_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        stats_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        db_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        self.gallery_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        self.movie_details_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        self.update_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        self.missing_online_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        dup_tab = ttk.Frame(self.notebook, style="Main.TFrame")
 
-        self.notebook.add(main_tab, text="Files List")
-        self.notebook.add(scan_tab, text="Folder Scan")
-        self.notebook.add(stats_tab, text="Statistics")
-        self.notebook.add(db_tab, text="SQLite Viewer")
-        self.notebook.add(self.gallery_tab, text="Gallery")
-        self.notebook.add(self.movie_details_tab, text="Movie Details")
-        self.notebook.add(self.update_tab, text="Update")
-        self.notebook.add(self.missing_online_tab, text="To Download")
-        self.notebook.add(dup_tab, text="Duplicates")
+        # Optional tab icons are loaded once and kept alive by self.
+        self._tab_images = []
+        tab_defs = [
+            (main_tab, "Files List", "files.png"),
+            (scan_tab, "Folder Scan", "folder.png"),
+            (stats_tab, "Statistics", "stats.png"),
+            (db_tab, "SQLite Viewer", "database.png"),
+            (self.gallery_tab, "Gallery", "gallery.png"),
+            (self.movie_details_tab, "Movie Details", "movie.png"),
+            (self.update_tab, "Update", "update.png"),
+            (self.missing_online_tab, "To Download", "download.png"),
+            (dup_tab, "Duplicates", "duplicates.png"),
+        ]
+
+        for tab, label, filename in tab_defs:
+            image = None
+            icon_path = RESOURCE_DIR / "assets" / "tab_icons" / filename
+            if icon_path.exists():
+                try:
+                    image = ImageTk.PhotoImage(Image.open(icon_path).convert("RGBA"))
+                    self._tab_images.append(image)
+                except Exception:
+                    image = None
+            if image is not None:
+                self.notebook.add(tab, text=label, image=image, compound="left")
+            else:
+                self.notebook.add(tab, text=label)
 
         self.notebook.bind("<<NotebookTabChanged>>", self.on_tab_changed)
 
@@ -1754,21 +2057,7 @@ class FileListerApp:
         self.setup_update_tab(self.update_tab)
         self.setup_missing_online_tab(self.missing_online_tab)
         self.setup_duplicates_tab(dup_tab)
-
-        self.build_gallery_ui()   # ✅ initialize gallery UI
-
-        self.status_var = tk.StringVar()
-        self.db_loading_var = tk.StringVar()
-        self.db_loading_running = False
-        self.db_loading_dot_count = 0
-
-        status_frame = tk.Frame(self.root, relief=tk.SUNKEN, bd=1)
-        status_frame.pack(fill="x", side="bottom")
-
-        tk.Label(status_frame, textvariable=self.status_var,
-                anchor="w").pack(side="left", fill="x", expand=True)
-        tk.Label(status_frame, textvariable=self.db_loading_var,
-                anchor="e", width=14).pack(side="right")
+        self.build_gallery_ui()
 
     def on_tab_changed(self, event):
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
@@ -1877,54 +2166,123 @@ class FileListerApp:
 
 
     def setup_main_tab(self, parent):
-        folder_frame = tk.Frame(parent)
-        folder_frame.pack(fill="x", pady=5)
+        """Build the branded Files List tab while preserving existing widgets.
 
-        tk.Label(folder_frame, text="Folder: ").pack(side="left")
-        self.folder_path = tk.StringVar()
-        tk.Entry(folder_frame, textvariable=self.folder_path, width=60).pack(side="left", padx=5)
+        Existing attribute names are deliberately retained because the scan,
+        database, export and selection handlers use them throughout app.py.
+        """
+        colors = self.colors
+        parent.configure(style="Main.TFrame")
 
-        tk.Button(folder_frame, text="Browse", command=self.browse_folder).pack(side="left")
-        tk.Button(
+        # -------------------------------------------------------------
+        # Scan toolbar
+        # -------------------------------------------------------------
+        folder_frame = tk.Frame(
+            parent,
+            bg=colors["surface"],
+            highlightbackground=colors["border"],
+            highlightthickness=1
+        )
+        folder_frame.pack(fill="x", padx=18, pady=(12, 5))
+
+        tk.Label(
             folder_frame,
-            text="Reset Scan",
-            command=self.reset_scan
-        ).pack(side="left", padx=5)
+            text="Folder:",
+            bg=colors["surface"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=(12, 7), pady=8)
 
-        opt_frame = tk.Frame(parent)
-        opt_frame.pack(fill="x", pady=5)
+        self.folder_path = tk.StringVar()
+        folder_entry = tk.Entry(
+            folder_frame,
+            textvariable=self.folder_path,
+            font=("Segoe UI", 10),
+            bg=colors["surface"],
+            fg=colors["text"],
+            insertbackground=colors["text"],
+            relief="solid",
+            bd=1,
+            highlightthickness=1,
+            highlightbackground=colors["border"]
+        )
+        folder_entry.pack(side="left", fill="x", expand=True, padx=4, pady=7, ipady=4)
+
+        ttk.Button(
+            folder_frame,
+            text="▣  Browse",
+            command=self.browse_folder
+        ).pack(side="left", padx=5, pady=6)
+
+        ttk.Button(
+            folder_frame,
+            text="⟳  Reset Scan",
+            command=self.reset_scan
+        ).pack(side="left", padx=(0, 10), pady=6)
+
+        # -------------------------------------------------------------
+        # Options / actions row
+        # -------------------------------------------------------------
+        opt_frame = tk.Frame(parent, bg=colors["background"])
+        opt_frame.pack(fill="x", padx=20, pady=(0, 4))
 
         self.include_subdirs = tk.BooleanVar()
-        tk.Checkbutton(opt_frame, text="Include subdirectories", variable=self.include_subdirs).pack(side="left")
-
-        tk.Button(opt_frame, text="List Files", command=self.list_files).pack(side="right")
-
-        tk.Button(
-                opt_frame,
-                text="Update Storage ID from Scan",
-                command=self.update_storage_id_from_scan
-            ).pack(side="right")
-
-        tk.Button(
+        tk.Checkbutton(
             opt_frame,
-            text="Show Unmatched Files",
+            text="Include subdirectories",
+            variable=self.include_subdirs,
+            bg=colors["background"],
+            fg=colors["text_dark"],
+            activebackground=colors["background"],
+            selectcolor=colors["surface"],
+            font=("Segoe UI", 9)
+        ).pack(side="left")
+
+        ttk.Button(
+            opt_frame,
+            text="▤  List Files",
+            command=self.list_files
+        ).pack(side="right", padx=(5, 0))
+
+        ttk.Button(
+            opt_frame,
+            text="▣  Update Storage ID from Scan",
+            command=self.update_storage_id_from_scan
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            opt_frame,
+            text="▤  Show Unmatched Files",
             command=self.show_unmatched_scanned_files
         ).pack(side="right", padx=5)
 
+        # -------------------------------------------------------------
+        # File list + details card
+        # -------------------------------------------------------------
+        split = tk.Frame(parent, bg=colors["background"])
+        split.pack(fill="both", expand=True, padx=18, pady=(0, 5))
 
-        # Split list + details
-        split = tk.Frame(parent)
-        split.pack(fill="both", expand=True)
-
-        # LEFT: table (tabular view)
-        left = tk.Frame(split)
-        left.pack(side="left", fill="both", expand=True)
+        # LEFT: file table
+        left = tk.Frame(
+            split,
+            bg=colors["surface"],
+            highlightbackground=colors["border"],
+            highlightthickness=1
+        )
+        left.pack(side="left", fill="both", expand=True, padx=(0, 7))
 
         self.files_count_var = tk.StringVar(value="Files: 0")
-        tk.Label(left, textvariable=self.files_count_var).pack(anchor="w")
+        tk.Label(
+            left,
+            textvariable=self.files_count_var,
+            bg=colors["surface"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 9, "bold"),
+            anchor="w"
+        ).pack(fill="x", padx=10, pady=(6, 3))
 
-        table_frame = tk.Frame(left)
-        table_frame.pack(fill="both", expand=True)
+        table_frame = tk.Frame(left, bg=colors["surface"])
+        table_frame.pack(fill="both", expand=True, padx=5, pady=(0, 5))
 
         cols = ("name", "ext", "size")
         self.file_table = ttk.Treeview(
@@ -1933,13 +2291,13 @@ class FileListerApp:
             show="headings"
         )
 
-        self.file_table.heading("name", text="File Name")
-        self.file_table.heading("ext", text="File Extension")
-        self.file_table.heading("size", text="File Size")
+        self.file_table.heading("name", text="▣  File Name")
+        self.file_table.heading("ext", text="▣  File Extension")
+        self.file_table.heading("size", text="▤  File Size")
 
-        self.file_table.column("name", width=380, anchor="w")
-        self.file_table.column("ext", width=120, anchor="center")
-        self.file_table.column("size", width=120, anchor="e")
+        self.file_table.column("name", width=520, minwidth=260, anchor="w")
+        self.file_table.column("ext", width=180, minwidth=110, anchor="center")
+        self.file_table.column("size", width=170, minwidth=110, anchor="e")
 
         ys = ttk.Scrollbar(table_frame, orient="vertical", command=self.file_table.yview)
         xs = ttk.Scrollbar(table_frame, orient="horizontal", command=self.file_table.xview)
@@ -1952,104 +2310,190 @@ class FileListerApp:
         self.file_table.bind("<<TreeviewSelect>>", self.on_file_table_select)
         self.file_table.bind("<Double-1>", self.on_file_table_double_click)
 
-
-        # RIGHT: details
-        right = tk.Frame(split, width=350)
+        # RIGHT: details card
+        right = tk.Frame(
+            split,
+            width=390,
+            bg=colors["surface"],
+            highlightbackground=colors["border"],
+            highlightthickness=1
+        )
         right.pack(side="right", fill="y")
         right.pack_propagate(False)
 
-        tk.Label(right, text="File Details:", font=("Arial", 12, "bold")).pack(anchor="w")
+        tk.Label(
+            right,
+            text="▣  File Details:",
+            bg=colors["surface"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 13, "bold")
+        ).pack(anchor="w", padx=16, pady=(12, 9))
 
-        details_frame = tk.Frame(right)
-        details_frame.pack(fill="x", pady=10)
+        details_frame = tk.Frame(right, bg=colors["surface"])
+        details_frame.pack(fill="x", padx=16)
 
         labels = ["File Name", "Extension", "Size", "Creation Date"]
         self.detail_vars = {}
         for i, lbl in enumerate(labels):
-            tk.Label(details_frame, text=lbl + ":").grid(row=i, column=0, sticky="w", pady=4)
+            tk.Label(
+                details_frame,
+                text=lbl + ":",
+                bg=colors["surface"],
+                fg=colors["text_dark"],
+                font=("Segoe UI", 9, "bold")
+            ).grid(row=i, column=0, sticky="nw", pady=6)
             var = tk.StringVar()
-            tk.Label(details_frame, textvariable=var).grid(row=i, column=1, sticky="w", pady=4)
+            tk.Label(
+                details_frame,
+                textvariable=var,
+                bg=colors["surface"],
+                fg=colors["text"],
+                font=("Segoe UI", 9),
+                wraplength=230,
+                justify="left"
+            ).grid(row=i, column=1, sticky="nw", padx=(10, 0), pady=6)
             self.detail_vars[lbl] = var
 
-        # ================= FILE SCAN STATISTICS =================
+        # Branded watermark: only the artwork portion of the app icon is used,
+        # so it does not compete with the file-detail values.
+        watermark_path = RESOURCE_DIR / "assets" / "FileLister_watermark.png"
+        self._watermark_image = None
+        if watermark_path.exists():
+            try:
+                wm = Image.open(watermark_path).convert("RGBA")
+                wm.thumbnail((285, 195), Image.Resampling.LANCZOS)
+                self._watermark_image = ImageTk.PhotoImage(wm)
+                tk.Label(
+                    right,
+                    image=self._watermark_image,
+                    bg=colors["surface"],
+                    bd=0
+                ).pack(side="bottom", anchor="se", padx=5, pady=4)
+            except Exception:
+                pass
 
-        totals_frame = ttk.Frame(parent)
-        totals_frame.pack(fill="x", padx=8, pady=(4,2))
+        # -------------------------------------------------------------
+        # Scan statistics
+        # -------------------------------------------------------------
+        totals_frame = tk.Frame(parent, bg=colors["background"])
+        totals_frame.pack(fill="x", padx=25, pady=(1, 4))
 
         self.total_files_var = tk.StringVar(value="Total Files: 0")
         self.total_size_var = tk.StringVar(value="Total Size: 0 MB")
 
-        ttk.Label(totals_frame, textvariable=self.total_files_var,
-                font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
+        tk.Label(
+            totals_frame,
+            textvariable=self.total_files_var,
+            bg=colors["background"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=8)
 
-        ttk.Label(totals_frame, textvariable=self.total_size_var,
-                font=("Segoe UI", 10, "bold")).pack(side="left", padx=20)
+        tk.Label(
+            totals_frame,
+            text="|",
+            bg=colors["background"],
+            fg=colors["border"]
+        ).pack(side="left")
 
-        # ---------- Files by Extension ----------
-        ext_frame = ttk.LabelFrame(parent, text="Files by Extension (Scan Results)")
-        ext_frame.pack(fill="x", padx=8, pady=4)
+        tk.Label(
+            totals_frame,
+            textvariable=self.total_size_var,
+            bg=colors["background"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 10, "bold")
+        ).pack(side="left", padx=8)
+
+        # Files by Extension
+        ext_frame = ttk.LabelFrame(
+            parent,
+            text="▥  Files by Extension (Scan Results)"
+        )
+        ext_frame.pack(fill="x", padx=18, pady=4)
 
         self.file_ext_tree = ttk.Treeview(
-            ext_frame, columns=("Ext", "Files", "Total Size"),
-            show="headings", height=5
+            ext_frame,
+            columns=("Ext", "Files", "Total Size"),
+            show="headings",
+            height=2
         )
-        self.file_ext_tree.pack(fill="x", padx=6, pady=4)
+        self.file_ext_tree.pack(fill="x", padx=6, pady=5)
 
-        self.file_ext_tree.heading("Ext", text="Extension")
-        self.file_ext_tree.heading("Files", text="File Count")
-        self.file_ext_tree.heading("Total Size", text="Total Size")
+        self.file_ext_tree.heading("Ext", text="▣  Extension")
+        self.file_ext_tree.heading("Files", text="▣  File Count")
+        self.file_ext_tree.heading("Total Size", text="▤  Total Size")
+        self.file_ext_tree.column("Ext", width=160, anchor="w")
+        self.file_ext_tree.column("Files", width=160, anchor="e")
+        self.file_ext_tree.column("Total Size", width=180, anchor="e")
 
-        self.file_ext_tree.column("Ext", width=120, anchor="w")
-        self.file_ext_tree.column("Files", width=100, anchor="e")
-        self.file_ext_tree.column("Total Size", width=140, anchor="e")
-
-
-        # ---------- Storage Summary ----------
-        storage_stats_frame = ttk.LabelFrame(parent, text="Storage Summary (Scan Results)")
-        storage_stats_frame.pack(fill="x", padx=8, pady=4)
+        # Storage Summary
+        storage_stats_frame = ttk.LabelFrame(
+            parent,
+            text="◉  Storage Summary (Scan Results)"
+        )
+        storage_stats_frame.pack(fill="x", padx=18, pady=4)
 
         self.file_storage_tree = ttk.Treeview(
-            storage_stats_frame, columns=("Storage", "Files", "Total Size"),
-            show="headings", height=5
+            storage_stats_frame,
+            columns=("Storage", "Files", "Total Size"),
+            show="headings",
+            height=2
         )
-        self.file_storage_tree.pack(fill="x", padx=6, pady=4)
+        self.file_storage_tree.pack(fill="x", padx=6, pady=5)
 
-        self.file_storage_tree.heading("Storage", text="Attached Media")
-        self.file_storage_tree.heading("Files", text="File Count")
-        self.file_storage_tree.heading("Total Size", text="Total Size")
+        self.file_storage_tree.heading("Storage", text="▣  Attached Media")
+        self.file_storage_tree.heading("Files", text="▣  File Count")
+        self.file_storage_tree.heading("Total Size", text="▤  Total Size")
+        self.file_storage_tree.column("Storage", width=220, anchor="w")
+        self.file_storage_tree.column("Files", width=160, anchor="e")
+        self.file_storage_tree.column("Total Size", width=180, anchor="e")
 
-        self.file_storage_tree.column("Storage", width=200, anchor="w")
-        self.file_storage_tree.column("Files", width=100, anchor="e")
-        self.file_storage_tree.column("Total Size", width=140, anchor="e")
-        
-        
-        bottom = tk.Frame(parent)
-        bottom.pack(fill="x", pady=10)
+        # -------------------------------------------------------------
+        # Bottom controls
+        # -------------------------------------------------------------
+        bottom = tk.Frame(parent, bg=colors["background"])
+        bottom.pack(fill="x", padx=18, pady=(4, 10))
 
-        storage_frame = tk.Frame(parent)
-        storage_frame.pack(fill="x", padx=5, pady=3)
+        storage_frame = tk.Frame(bottom, bg=colors["background"])
+        storage_frame.pack(side="left", fill="x", expand=True)
 
-        tk.Label(storage_frame, text="Storage ID:").pack(side="left")
+        tk.Label(
+            storage_frame,
+            text="Storage ID:",
+            bg=colors["background"],
+            fg=colors["text_dark"],
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left", padx=(5, 6))
 
         self.storage_id_combo = ttk.Combobox(
             storage_frame,
             textvariable=self.storage_id_var,
-            width=23,          # ttk uses slightly different sizing
-            state="normal"     # <-- allows typing NEW Storage IDs
+            width=23,
+            state="normal"
         )
-
-        self.storage_id_combo.pack(side="left", padx=5)
+        self.storage_id_combo.pack(side="left", padx=3)
         self.storage_id_entry = self.storage_id_combo
-
 
         tk.Label(
             storage_frame,
             text="(e.g. HDD_MEDIA_01)",
-            fg="gray"
-        ).pack(side="left")
+            bg=colors["background"],
+            fg="#37698F",
+            font=("Segoe UI", 9)
+        ).pack(side="left", padx=6)
 
-        tk.Button(bottom, text="Export to Excel", command=self.export_to_excel).pack(side="right")
-        tk.Button(bottom, text="Export to SQLite", command=self.export_to_sqlite).pack(side="right", padx=5)
+        ttk.Button(
+            bottom,
+            text="▤  Export to SQLite",
+            command=self.export_to_sqlite
+        ).pack(side="right", padx=5)
+
+        ttk.Button(
+            bottom,
+            text="▣  Export to Excel",
+            style="Green.TButton",
+            command=self.export_to_excel
+        ).pack(side="right")
 
     def setup_folder_scan_tab(self, parent):
         folder_frame = tk.Frame(parent)

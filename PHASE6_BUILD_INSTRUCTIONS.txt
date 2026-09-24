@@ -1,0 +1,24 @@
+FileLister Phase 6 - PyInstaller packaging
+
+Replace in your existing project:
+1. FileLister.spec
+2. app.py
+
+Then open PowerShell in the project folder and run:
+    pyinstaller --clean --noconfirm FileLister.spec
+
+The current spec remains a ONE-FILE executable.
+Output:
+    dist\FileLister.exe
+
+The spec packages:
+    assets\FileLister.png
+    assets\FileLister_header.png
+    assets\FileLister_watermark.png
+    assets\tab_icons\*.png
+    FileLister.ico
+
+Important:
+app.py now uses RESOURCE_DIR for read-only bundled assets when running
+inside a PyInstaller one-file executable, while APP_DIR remains the
+location for user-writable files/database/configuration beside the EXE.
