@@ -5280,17 +5280,23 @@ class FileListerApp:
     def setup_db_viewer_tab(self, parent):
         """Build the SQLite Viewer using a compact, fixed-height layout.
 
-        This layout is intentionally constrained so the record list does not
-        consume all available vertical space and the Movie Metadata editor,
-        cover paths, buttons, and cover previews remain accessible on a
-        maximized 1650x920 window. Existing widget names and callbacks are
-        preserved for compatibility with the rest of app.py.
+        The record list uses a fixed 350 px height so the Movie Metadata
+        editor remains visible on a maximized 1650x920 window. The metadata
+        form is arranged so the Description editor sits to the right of the
+        Year/Category row, while the Cover path fields and Browse buttons
+        occupy the full left side of the form.
+        Existing widget names and callbacks are preserved.
         """
+
         # ---------- Storage ID Filter ----------
         filter_frame = tk.Frame(parent)
         filter_frame.pack(fill="x", padx=8, pady=3)
 
-        tk.Label(filter_frame, text="Storage ID:", font=("Segoe UI", 9, "bold")).pack(side="left")
+        tk.Label(
+            filter_frame,
+            text="Storage ID:",
+            font=("Segoe UI", 9, "bold")
+        ).pack(side="left")
 
         self.storage_filter_combo = ttk.Combobox(
             filter_frame,
@@ -5300,7 +5306,10 @@ class FileListerApp:
             width=24
         )
         self.storage_filter_combo.pack(side="left", padx=6)
-        self.storage_filter_combo.bind("<<ComboboxSelected>>", lambda e: self.load_db_records())
+        self.storage_filter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.load_db_records()
+        )
 
         # ---------- Actions / Filters ----------
         top = tk.Frame(parent)
@@ -5336,18 +5345,30 @@ class FileListerApp:
         tk.Label(top, text="Category:").pack(side="left", padx=(6, 0))
         self.db_category_var = tk.StringVar(value="All")
         self.db_category_combo = ttk.Combobox(
-            top, textvariable=self.db_category_var, state="readonly", width=16
+            top,
+            textvariable=self.db_category_var,
+            state="readonly",
+            width=16
         )
         self.db_category_combo.pack(side="left", padx=4)
-        self.db_category_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
+        self.db_category_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.filter_db_records()
+        )
 
         tk.Label(top, text="Year:").pack(side="left", padx=(6, 0))
         self.db_year_var = tk.StringVar(value="All")
         self.db_year_combo = ttk.Combobox(
-            top, textvariable=self.db_year_var, state="readonly", width=8
+            top,
+            textvariable=self.db_year_var,
+            state="readonly",
+            width=8
         )
         self.db_year_combo.pack(side="left", padx=4)
-        self.db_year_combo.bind("<<ComboboxSelected>>", lambda e: self.filter_db_records())
+        self.db_year_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.filter_db_records()
+        )
 
         tk.Label(top, text="Metadata:").pack(side="left", padx=(6, 0))
         self.meta_filter_var = tk.StringVar(value="All")
@@ -5359,7 +5380,10 @@ class FileListerApp:
             width=13
         )
         self.meta_filter_combo.pack(side="left", padx=4)
-        self.meta_filter_combo.bind("<<ComboboxSelected>>", lambda e: self.load_db_records())
+        self.meta_filter_combo.bind(
+            "<<ComboboxSelected>>",
+            lambda e: self.load_db_records()
+        )
 
         tk.Label(top, text="Page size:").pack(side="left", padx=(6, 0))
         self.page_size_var = tk.IntVar(value=self.page_size)
@@ -5389,24 +5413,28 @@ class FileListerApp:
             page_size_entry,
         ]
 
-        # ---------- Records: intentionally fixed height ----------
-        # The previous expand=True tree consumed the entire remaining tab,
-        # pushing the metadata editor below the visible window. Keep this
-        # section compact and scrollable instead.
+        # ---------- Records: fixed height 350 px ----------
         tree_frame = tk.Frame(parent, height=350)
         tree_frame.pack(fill="x", padx=8, pady=2)
         tree_frame.pack_propagate(False)
 
         cols = ("No", "Name", "Ext", "Size", "Storage", "Year", "Category")
         self.db_tree = ttk.Treeview(
-            tree_frame, columns=cols, show="headings", selectmode="extended"
+            tree_frame,
+            columns=cols,
+            show="headings",
+            selectmode="extended"
         )
         self.db_tree.bind("<<TreeviewSelect>>", self.on_db_row_select)
         self.db_tree_controls = [self.db_tree]
         self.db_tree.bind("<Button-3>", self._show_db_tree_context_menu)
 
         for c in cols:
-            self.db_tree.heading(c, text=c, command=lambda _c=c: self.sort_db_by_column(_c))
+            self.db_tree.heading(
+                c,
+                text=c,
+                command=lambda _c=c: self.sort_db_by_column(_c)
+            )
             self.db_tree.column(c, width=150, anchor="w")
 
         self.db_tree.column("No", width=55, anchor="center", stretch=False)
@@ -5421,7 +5449,11 @@ class FileListerApp:
         self.db_tree.tag_configure("meta_incomplete", background="#fff5cc")
         self.db_tree.tag_configure("meta_missing", background="#ffe6e6")
 
-        scroll = ttk.Scrollbar(tree_frame, orient="vertical", command=self.db_tree.yview)
+        scroll = ttk.Scrollbar(
+            tree_frame,
+            orient="vertical",
+            command=self.db_tree.yview
+        )
         self.db_tree.configure(yscrollcommand=scroll.set)
         self.db_tree.pack(side="left", fill="both", expand=True)
         scroll.pack(side="right", fill="y")
@@ -5437,17 +5469,35 @@ class FileListerApp:
         self.page_label = tk.Label(pager, text="Page 0 / 0")
         self.page_label.pack(side="left", padx=8)
 
-        # ---------- Bulk Category Update: one compact row ----------
-        bulk_frame = tk.LabelFrame(parent, text="Bulk Update From Category Page", padx=6, pady=4)
+        # ---------- Bulk Category Update ----------
+        bulk_frame = tk.LabelFrame(
+            parent,
+            text="Bulk Update From Category Page",
+            padx=6,
+            pady=4
+        )
         bulk_frame.pack(fill="x", padx=8, pady=3)
 
         self.category_url_var = tk.StringVar()
-        ttk.Label(bulk_frame, text="Category Page URL:").pack(side="left", padx=(2, 6))
-        self.category_url_entry = ttk.Entry(bulk_frame, textvariable=self.category_url_var)
-        self.category_url_entry.pack(side="left", fill="x", expand=True, padx=3)
+        ttk.Label(
+            bulk_frame,
+            text="Category Page URL:"
+        ).pack(side="left", padx=(2, 6))
+
+        self.category_url_entry = ttk.Entry(
+            bulk_frame,
+            textvariable=self.category_url_var
+        )
+        self.category_url_entry.pack(
+            side="left",
+            fill="x",
+            expand=True,
+            padx=3
+        )
         self.create_category_url_context_menu()
         self.category_url_entry.bind("<Button-3>", self._show_category_url_menu)
         self.category_url_entry.bind("<Control-Button-1>", self._show_category_url_menu)
+
         ttk.Button(
             bulk_frame,
             text="Update Movies From Page",
@@ -5455,78 +5505,305 @@ class FileListerApp:
         ).pack(side="left", padx=(8, 2))
 
         # ---------- Movie Metadata ----------
-        details_frame = tk.LabelFrame(parent, text="Movie Metadata", padx=6, pady=4)
+        details_frame = tk.LabelFrame(
+            parent,
+            text="Movie Metadata",
+            padx=6,
+            pady=4
+        )
         details_frame.pack(fill="x", padx=8, pady=4)
         details_frame.columnconfigure(0, weight=1)
         details_frame.columnconfigure(1, weight=0)
         details_frame.columnconfigure(2, weight=0)
 
         form_frame = ttk.Frame(details_frame)
-        form_frame.grid(row=0, column=0, sticky="nsew", padx=4, pady=2)
-        form_frame.columnconfigure(1, weight=1)
+        form_frame.grid(
+            row=0,
+            column=0,
+            sticky="nsew",
+            padx=(4, 64),
+            pady=2
+        )
 
-        # Metadata URL
-        ttk.Label(form_frame, text="Metadata URL:").grid(row=0, column=0, sticky="w", pady=1)
+        # ---------- Metadata Form ----------
+        # The form is split into a left editor area and a right description
+        # area. This mirrors the desired UI: the URL, action buttons, Year,
+        # Category, and Cover paths stay on the left; Description occupies
+        # the right side.
+        form_frame.columnconfigure(0, weight=0)
+        form_frame.columnconfigure(1, weight=1)
+        form_frame.columnconfigure(2, weight=0)
+
+        # Left-side form area
+        left_form = ttk.Frame(form_frame)
+        left_form.grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky="nsew",
+            padx=(0, 8),
+            pady=0
+        )
+        left_form.columnconfigure(1, weight=1)
+        left_form.columnconfigure(2, weight=0)
+
+        # Right-side Description area
+        desc_frame = ttk.Frame(form_frame)
+        desc_frame.grid(
+            row=0,
+            column=2,
+            sticky="nw",
+            padx=(8, 0),
+            pady=0
+        )
+
+        # ---------- Metadata URL ----------
+        ttk.Label(
+            left_form,
+            text="Metadata URL:"
+        ).grid(
+            row=0,
+            column=0,
+            sticky="w",
+            pady=1
+        )
+
         self.meta_url_var = tk.StringVar()
-        self.meta_url_entry = ttk.Entry(form_frame, textvariable=self.meta_url_var)
-        self.meta_url_entry.grid(row=0, column=1, columnspan=2, sticky="ew", pady=1)
+        self.meta_url_entry = ttk.Entry(
+            left_form,
+            textvariable=self.meta_url_var
+        )
+        self.meta_url_entry.grid(
+            row=0,
+            column=1,
+            sticky="ew",
+            pady=1
+        )
         self.create_url_context_menu()
         self.meta_url_entry.bind("<Button-3>", self._show_url_menu)
 
-        # Metadata action buttons
-        btn_frame = ttk.Frame(form_frame)
-        btn_frame.grid(row=1, column=1, columnspan=2, sticky="w", pady=2)
-        ttk.Button(btn_frame, text="Fetch Metadata", command=self.fetch_metadata).pack(side="left", padx=3)
-        ttk.Button(btn_frame, text="🔄 Refresh Metadata", command=self.refresh_metadata).pack(side="left", padx=3)
-        ttk.Button(btn_frame, text="⚡ Auto Update", command=self.auto_update_by_url).pack(side="left", padx=3)
+        # ---------- Metadata Action Buttons ----------
+        btn_frame = ttk.Frame(left_form)
+        btn_frame.grid(
+            row=1,
+            column=1,
+            sticky="w",
+            pady=2
+        )
 
-        # Year + Category on one row
-        ttk.Label(form_frame, text="Year:").grid(row=2, column=0, sticky="w", pady=2)
+        ttk.Button(
+            btn_frame,
+            text="Fetch Metadata",
+            command=self.fetch_metadata
+        ).pack(side="left", padx=3)
+
+        ttk.Button(
+            btn_frame,
+            text="🔄 Refresh Metadata",
+            command=self.refresh_metadata
+        ).pack(side="left", padx=3)
+
+        ttk.Button(
+            btn_frame,
+            text="⚡ Auto Update",
+            command=self.auto_update_by_url
+        ).pack(side="left", padx=3)
+
+        # ---------- Year + Category ----------
         self.year_var = tk.StringVar()
-        ttk.Entry(form_frame, textvariable=self.year_var, width=9).grid(row=2, column=1, sticky="w", pady=2)
-        ttk.Label(form_frame, text="Category:").grid(row=2, column=2, sticky="e", padx=(8, 4))
+
+        ttk.Label(
+            left_form,
+            text="Year:"
+        ).grid(
+            row=2,
+            column=0,
+            sticky="w",
+            pady=2
+        )
+
+        year_entry = ttk.Entry(
+            left_form,
+            textvariable=self.year_var,
+            width=9
+        )
+        year_entry.grid(
+            row=2,
+            column=1,
+            sticky="w",
+            pady=2
+        )
+
+        ttk.Label(
+            left_form,
+            text="Category:"
+        ).grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(75, 4),
+            pady=2
+        )
+
         self.category_combo = ttk.Combobox(
-            form_frame,
+            left_form,
             textvariable=self.category_var,
             values=self.get_all_categories(),
             state="normal",
-            width=25
+            width=55
         )
-        self.category_combo.grid(row=2, column=3, sticky="w", pady=2)
+        self.category_combo.grid(
+            row=2,
+            column=1,
+            sticky="w",
+            padx=(125, 0),
+            pady=2
+        )
 
-        # Description: compact two-line editor
-        ttk.Label(form_frame, text="Description:").grid(row=3, column=0, sticky="nw", pady=2)
-        self.description_text = tk.Text(form_frame, height=2, width=50, wrap="word")
-        self.description_text.grid(row=3, column=1, columnspan=3, sticky="ew", pady=2)
+        # ---------- Description: right side, tall editor ----------
+        ttk.Label(
+            desc_frame,
+            text="Description:"
+        ).grid(
+            row=0,
+            column=0,
+            sticky="nw",
+            padx=(0, 4),
+            pady=2
+        )
+
+        self.description_text = tk.Text(
+            desc_frame,
+            height=11,
+            width=40,
+            wrap="word"
+        )
+        self.description_text.grid(
+            row=0,
+            column=1,
+            sticky="nw",
+            pady=2
+        )
         self.create_description_context_menu()
         self.description_text.bind("<Button-3>", self._show_description_menu)
         self.description_text.bind("<Control-Button-1>", self._show_description_menu)
 
-        # Cover paths: full-width fields with browse buttons
-        ttk.Label(form_frame, text="Cover 1:").grid(row=4, column=0, sticky="w", pady=2)
-        ttk.Entry(form_frame, textvariable=self.cover1_local_path).grid(row=4, column=1, columnspan=2, sticky="ew", pady=2)
-        ttk.Button(form_frame, text="Browse", command=self.browse_cover1).grid(row=4, column=3, sticky="w", padx=5, pady=2)
+        # ---------- Cover 1 ----------
+        ttk.Label(
+            left_form,
+            text="Cover 1:"
+        ).grid(
+            row=3,
+            column=0,
+            sticky="w",
+            pady=2
+        )
 
-        ttk.Label(form_frame, text="Cover 2:").grid(row=5, column=0, sticky="w", pady=2)
-        ttk.Entry(form_frame, textvariable=self.cover2_local_path).grid(row=5, column=1, columnspan=2, sticky="ew", pady=2)
-        ttk.Button(form_frame, text="Browse", command=self.browse_cover2).grid(row=5, column=3, sticky="w", padx=5, pady=2)
+        ttk.Entry(
+            left_form,
+            textvariable=self.cover1_local_path
+        ).grid(
+            row=3,
+            column=1,
+            sticky="ew",
+            padx=(0, 4),
+            pady=2
+        )
 
-        ttk.Button(form_frame, text="Save Metadata", command=self.save_metadata).grid(
-            row=6, column=1, sticky="w", pady=4
+        self.cover1_browse_button = ttk.Button(
+            left_form,
+            text="Browse",
+            command=self.browse_cover1,
+            width=10
+        )
+        self.cover1_browse_button.grid(
+            row=3,
+            column=2,
+            sticky="e",
+            padx=0,
+            pady=2
+        )
+
+        # ---------- Cover 2 ----------
+        ttk.Label(
+            left_form,
+            text="Cover 2:"
+        ).grid(
+            row=4,
+            column=0,
+            sticky="w",
+            pady=2
+        )
+
+        ttk.Entry(
+            left_form,
+            textvariable=self.cover2_local_path
+        ).grid(
+            row=4,
+            column=1,
+            sticky="ew",
+            padx=(0, 4),
+            pady=2
+        )
+
+        self.cover2_browse_button = ttk.Button(
+            left_form,
+            text="Browse",
+            command=self.browse_cover2,
+            width=10
+        )
+        self.cover2_browse_button.grid(
+            row=4,
+            column=2,
+            sticky="e",
+            padx=0,
+            pady=2
+        )
+
+        # ---------- Save Metadata ----------
+        ttk.Button(
+            left_form,
+            text="Save Metadata",
+            command=self.save_metadata
+        ).grid(
+            row=5,
+            column=1,
+            sticky="w",
+            pady=4
         )
 
         # ---------- Cover previews ----------
         cover1_frame = ttk.Frame(details_frame)
-        cover1_frame.grid(row=0, column=1, sticky="n", padx=8, pady=1)
+        cover1_frame.grid(
+            row=0,
+            column=1,
+            sticky="n",
+            padx=8,
+            pady=1
+        )
         ttk.Label(cover1_frame, text="Cover 1").pack()
-        self.image_label1 = tk.Label(cover1_frame, relief="solid", bd=1)
+        self.image_label1 = tk.Label(
+            cover1_frame,
+            relief="solid",
+            bd=1
+        )
         self.image_label1._fl_image_size = (150, 190)
         self.image_label1.pack(pady=2)
 
         cover2_frame = ttk.Frame(details_frame)
-        cover2_frame.grid(row=0, column=2, sticky="n", padx=8, pady=1)
+        cover2_frame.grid(
+            row=0,
+            column=2,
+            sticky="n",
+            padx=8,
+            pady=1
+        )
         ttk.Label(cover2_frame, text="Cover 2").pack()
-        self.image_label2 = tk.Label(cover2_frame, relief="solid", bd=1)
+        self.image_label2 = tk.Label(
+            cover2_frame,
+            relief="solid",
+            bd=1
+        )
         self.image_label2._fl_image_size = (150, 190)
         self.image_label2.pack(pady=2)
 
