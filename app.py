@@ -533,9 +533,9 @@ class FileListerApp:
                 if not os.path.exists(resolved_image_path):
                     continue
 
-                img = Image.open(resolved_image_path)
-                img.thumbnail((160, 230))
-                photo = ImageTk.PhotoImage(img)
+                with Image.open(resolved_image_path) as img:
+                    img.thumbnail((160, 230))
+                    photo = ImageTk.PhotoImage(img)
 
                 lbl = tk.Label(self.gallery_frame,
                             image=photo,
@@ -1149,10 +1149,10 @@ class FileListerApp:
     def display_image_from_file(self, image_path, label_widget):
         try:
             image_path = self.resolve_cover_path(image_path)
-            img = Image.open(image_path)
-            target_size = getattr(label_widget, "_fl_image_size", (220, 280))
-            img.thumbnail(target_size, Image.Resampling.LANCZOS)
-            photo = ImageTk.PhotoImage(img)
+            with Image.open(image_path) as img:
+                target_size = getattr(label_widget, "_fl_image_size", (220, 280))
+                img.thumbnail(target_size, Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
 
             label_widget.configure(image=photo)
             label_widget.image = photo
@@ -1620,8 +1620,8 @@ class FileListerApp:
 
             canvas.configure(xscrollcommand=h_scroll.set, yscrollcommand=v_scroll.set)
 
-            img = Image.open(image_path)
-            photo = ImageTk.PhotoImage(img)
+            with Image.open(image_path) as img:
+                photo = ImageTk.PhotoImage(img)
 
             canvas.create_image(0, 0, anchor="nw", image=photo)
             canvas.image = photo
@@ -5280,7 +5280,7 @@ class FileListerApp:
     def setup_db_viewer_tab(self, parent):
         """Build the SQLite Viewer using a compact, fixed-height layout.
 
-        The record list uses a fixed 350 px height so the Movie Metadata
+        The record list uses a fixed 220 px height so the Movie Metadata
         editor remains visible on a maximized 1650x920 window. The metadata
         form is arranged so the Description editor sits to the right of the
         Year/Category row, while the Cover path fields and Browse buttons
@@ -5413,8 +5413,8 @@ class FileListerApp:
             page_size_entry,
         ]
 
-        # ---------- Records: fixed height 350 px ----------
-        tree_frame = tk.Frame(parent, height=350)
+        # ---------- Records: fixed height 220 px ----------
+        tree_frame = tk.Frame(parent, height=220)
         tree_frame.pack(fill="x", padx=8, pady=2)
         tree_frame.pack_propagate(False)
 

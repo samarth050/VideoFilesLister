@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import pytest
 
+import app as app_module
 from app import FileListerApp
 
 
@@ -83,3 +86,34 @@ def test_reset_scan_folder_tab_restores_defaults():
     assert app.scan_results == []
     assert app.scan_operation_in_progress is False
     assert app.scan_inline_entry is None
+
+
+def test_display_image_from_file_closes_source(monkeypatch):
+    class FakeImage:
+        closed = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_value, traceback):
+            self.closed = True
+
+        def thumbnail(self, size, resample):
+            pass
+
+    image = FakeImage()
+    monkeypatch.setattr(app_module.Image, "open", lambda path: image)
+    monkeypatch.setattr(app_module.ImageTk, "PhotoImage", lambda source: "photo")
+
+    class FakeLabel:
+        def configure(self, **kwargs):
+            self.configured_image = kwargs["image"]
+
+    label = FakeLabel()
+    FileListerApp.display_image_from_file(
+        SimpleNamespace(resolve_cover_path=lambda path: path), "cover.jpg", label
+    )
+
+    assert image.closed
+    assert label.configured_image == "photo"
+    assert label.image == "photo"

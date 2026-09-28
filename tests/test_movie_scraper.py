@@ -83,6 +83,64 @@ class MovieScraperCategoryTests(unittest.TestCase):
             "https://www.adultfilmdatabase.com/Graphics/Boxes/200/Back/67376.jpg",
         ])
 
+    def test_scrape_tmdb_movie_page(self):
+        html = """
+            <html><head>
+                <meta property="og:title" content="Femmes (1983)">
+                <meta property="og:description" content="A film overview.">
+                <meta property="og:image" content="https://media.themoviedb.org/t/p/w300_and_h450_face/poster.jpg">
+                <script type="application/ld+json">
+                    {"@type":"Movie","name":"Femmes"}
+                </script>
+            </head><body>
+                <span class="release">06/22/1983 (FR)</span>
+                <a href="/genre/18-drama/movie">Drama</a>
+                <img src="https://media.themoviedb.org/t/p/w533_and_h300_face/backdrop.jpg">
+            </body></html>
+        """
+        with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html)):
+            data = scrape_movie("https://www.themoviedb.org/movie/336543-femmes")
+
+        self.assertEqual(data["name"], "Femmes")
+        self.assertEqual(data["year"], "1983")
+        self.assertEqual(data["category"], "Drama")
+        self.assertEqual(data["description"], "A film overview.")
+        self.assertEqual(data["images"], [
+            "https://image.tmdb.org/t/p/original/poster.jpg",
+            "https://image.tmdb.org/t/p/original/backdrop.jpg",
+        ])
+
+    def test_scrape_imdb_title_page(self):
+        class GraphQLResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "data": {
+                        "title": {
+                            "titleText": {"text": "Dirty Woman"},
+                            "releaseYear": {"year": 1989},
+                            "genres": {"genres": [{"text": "Adult"}, {"text": "Drama"}]},
+                            "plot": {"plotText": {"plainText": "Dirty Woman."}},
+                            "primaryImage": None,
+                        }
+                    }
+                }
+
+        with patch("utils.movie_scraper.SESSION.post", return_value=GraphQLResponse()) as post:
+            with patch("utils.movie_scraper.SESSION.get") as get:
+                data = scrape_movie("https://www.imdb.com/title/tt0160208")
+
+        self.assertEqual(data["name"], "Dirty Woman")
+        self.assertEqual(data["year"], "1989")
+        self.assertEqual(data["category"], "Adult, Drama")
+        self.assertEqual(data["description"], "Dirty Woman.")
+        self.assertEqual(data["images"], [])
+        post.assert_called_once()
+        get.assert_not_called()
+        self.assertEqual(post.call_args.kwargs["json"]["variables"]["id"], "tt0160208")
+
 
 if __name__ == "__main__":
     unittest.main()

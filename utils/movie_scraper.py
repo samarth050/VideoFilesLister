@@ -9,6 +9,7 @@ It is safe to import into FileLister.
 """
 
 import re
+import json
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
@@ -99,6 +100,10 @@ def extract_size_info(text):
 
 
 def scrape_movie(url, timeout=15):
+    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+    if host == "imdb.com" or host.endswith(".imdb.com"):
+        return _scrape_imdb_movie(url, timeout)
+
     r = SESSION.get(url, timeout=timeout)
     r.raise_for_status()
 
@@ -106,9 +111,10 @@ def scrape_movie(url, timeout=15):
 
     # Adult Film Database has a distinct, structured page format.  Dispatch
     # only for that host so the existing Rarelust parsing remains unchanged.
-    host = (urlparse(url).hostname or "").lower().removeprefix("www.")
     if host == "adultfilmdatabase.com":
         return _scrape_adultfilmdatabase_movie(url, soup)
+    if host == "themoviedb.org":
+        return _scrape_tmdb_movie(url, soup)
 
     # -------- Name + Year --------
     slug = urlparse(url).path.strip("/")
@@ -204,6 +210,63 @@ def scrape_movie(url, timeout=15):
     }
 
 
+def _scrape_imdb_movie(url, timeout):
+    """Fetch title metadata from IMDb's public GraphQL endpoint."""
+    title_match = re.search(r"/title/(tt\d+)", urlparse(url).path, re.IGNORECASE)
+    if not title_match:
+        raise ValueError("IMDb URL must contain a title ID, such as tt0160208.")
+
+    query = """
+        query GetTitle($id: ID!) {
+            title(id: $id) {
+                titleText { text }
+                releaseYear { year }
+                genres { genres { text } }
+                plot { plotText { plainText } }
+                primaryImage { url }
+            }
+        }
+    """
+    response = SESSION.post(
+        "https://api.graphql.imdb.com/",
+        json={"query": query, "variables": {"id": title_match.group(1)}},
+        headers={
+            "Origin": "https://www.imdb.com",
+            "Referer": "https://www.imdb.com/",
+        },
+        timeout=timeout,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    if payload.get("errors"):
+        raise ValueError(payload["errors"][0].get("message", "IMDb lookup failed."))
+
+    title = payload.get("data", {}).get("title")
+    if not title:
+        raise ValueError(f"IMDb title {title_match.group(1)} was not found.")
+
+    genre_data = (title.get("genres") or {}).get("genres") or []
+    genres = [
+        item.get("text", "").strip()
+        for item in genre_data
+        if isinstance(item, dict) and item.get("text", "").strip()
+    ]
+    plot = (title.get("plot") or {}).get("plotText") or {}
+    plot = plot.get("plainText", "")
+    primary_image = title.get("primaryImage") or {}
+    image_url = primary_image.get("url")
+
+    return {
+        "name": (title.get("titleText") or {}).get("text", ""),
+        "year": str((title.get("releaseYear") or {}).get("year") or ""),
+        "category": ", ".join(dict.fromkeys(genres)),
+        "description": plot.strip() if isinstance(plot, str) else "",
+        "images": [image_url] if image_url else [],
+        "size_text": "",
+        "size_bytes": None,
+    }
+
+
 def _scrape_adultfilmdatabase_movie(url, soup):
     """Extract metadata and front/back cover art from an Adult Film Database video page."""
     title = soup.select_one("h1[itemprop='name'], h1")
@@ -256,6 +319,124 @@ def _scrape_adultfilmdatabase_movie(url, soup):
         "category": category,
         "description": description,
         "images": images[:2],
+        "size_text": "",
+        "size_bytes": None,
+    }
+
+
+def _scrape_tmdb_movie(url, soup):
+    """Extract movie metadata and artwork from a TMDB movie page."""
+    structured_data = {}
+    for script in soup.select('script[type="application/ld+json"]'):
+        try:
+            payload = json.loads(script.string or script.get_text())
+        except (TypeError, json.JSONDecodeError):
+            continue
+
+        candidates = payload if isinstance(payload, list) else [payload]
+        if isinstance(payload, dict) and isinstance(payload.get("@graph"), list):
+            candidates.extend(payload["@graph"])
+        for candidate in candidates:
+            if not isinstance(candidate, dict):
+                continue
+            types = candidate.get("@type", [])
+            if isinstance(types, str):
+                types = [types]
+            if "Movie" in types:
+                structured_data = candidate
+                break
+        if structured_data:
+            break
+
+    def meta_content(selector):
+        node = soup.select_one(selector)
+        return node.get("content", "").strip() if node else ""
+
+    title = (
+        structured_data.get("name")
+        or meta_content('meta[property="og:title"]')
+        or (soup.select_one("h1").get_text(" ", strip=True) if soup.select_one("h1") else "")
+    )
+    title_year = re.search(r"\b((?:19|20)\d{2})\)?\s*$", title)
+    published_year = re.search(
+        r"\b((?:19|20)\d{2})\b",
+        str(structured_data.get("datePublished", "")),
+    )
+    release_node = soup.select_one(".release")
+    release_year = re.search(
+        r"\b((?:19|20)\d{2})\b",
+        release_node.get_text(" ", strip=True) if release_node else "",
+    )
+    year_match = published_year or release_year or title_year
+    year = year_match.group(1) if year_match else ""
+    name = re.sub(r"\s*\(((?:19|20)\d{2})\)\s*$", "", title).strip()
+
+    raw_genres = structured_data.get("genre") or []
+    if isinstance(raw_genres, str):
+        raw_genres = [raw_genres]
+    genres = []
+    for genre in raw_genres:
+        if isinstance(genre, dict):
+            genre = genre.get("name", "")
+        genre = str(genre).strip()
+        if genre and genre.casefold() not in {item.casefold() for item in genres}:
+            genres.append(genre)
+    if not genres:
+        for link in soup.select('a[href*="/genre/"]'):
+            genre = link.get_text(" ", strip=True)
+            if genre and genre.casefold() not in {item.casefold() for item in genres}:
+                genres.append(genre)
+    category = ", ".join(genres)
+
+    description = (
+        structured_data.get("description")
+        or meta_content('meta[property="og:description"]')
+        or meta_content('meta[name="description"]')
+    ).strip()
+    if not description:
+        overview = soup.select_one(".overview, [data-testid='overview']")
+        description = overview.get_text(" ", strip=True) if overview else ""
+
+    image_urls = []
+
+    def add_image(source):
+        if not source:
+            return
+        absolute_url = urljoin(url, source.strip())
+        parsed = urlparse(absolute_url)
+        if parsed.hostname not in {"media.themoviedb.org", "image.tmdb.org"}:
+            return
+        image_path = parsed.path
+        if "/t/p/" in image_path:
+            image_file = image_path.split("/t/p/", 1)[1].split("/", 1)
+            if len(image_file) == 2:
+                image_path = "/t/p/original/" + image_file[1]
+        if not image_path.lower().endswith((".jpg", ".jpeg", ".png", ".webp")):
+            return
+        normalized_url = f"https://image.tmdb.org{image_path}"
+        if normalized_url not in image_urls:
+            image_urls.append(normalized_url)
+
+    structured_images = structured_data.get("image") or []
+    if isinstance(structured_images, str):
+        structured_images = [structured_images]
+    for image in structured_images:
+        add_image(image.get("url") if isinstance(image, dict) else image)
+    add_image(meta_content('meta[property="og:image"]'))
+
+    for image in soup.find_all("img"):
+        for attribute in ("data-src", "data-lazy-src", "src"):
+            add_image(image.get(attribute))
+        srcset = image.get("srcset", "")
+        for candidate in srcset.split(","):
+            add_image(candidate.strip().split(" ")[0])
+
+    return {
+        "name": name,
+        "year": year,
+        "category": category,
+        "description": description,
+        "images": image_urls[:2],
         "size_text": "",
         "size_bytes": None,
     }
