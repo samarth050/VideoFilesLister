@@ -1,4 +1,9 @@
 {
   "last_db_path": "VideoFiles.db",
-  "last_storage_id": "TEST"
+  "last_storage_id": "TEST",
+  "videosnapper_video": "D:/Movies/RL/HUNTA-888.mp4",
+  "videosnapper_output_folder": "C:/Users/Samarth Sinha/Downloads",
+  "videosnapper_rows": 5,
+  "videosnapper_cols": 3,
+  "videosnapper_format": "JPEG"
 }
