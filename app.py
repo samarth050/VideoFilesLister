@@ -160,6 +160,7 @@ from utils.helpers import (
 )
 
 from utils.movie_scraper import scrape_movie, scrape_category_urls
+from videosnapper.tabs import VideoSnapperTabs
 
 class ExportDialog:
     def __init__(self, parent, options):
@@ -2019,6 +2020,8 @@ class FileListerApp:
         self.update_tab = ttk.Frame(self.notebook, style="Main.TFrame")
         self.missing_online_tab = ttk.Frame(self.notebook, style="Main.TFrame")
         dup_tab = ttk.Frame(self.notebook, style="Main.TFrame")
+        # VideoSnapper is integrated into the same Notebook/root. These are
+        # feature tabs only; no second application window is created.
 
         # Optional tab icons are loaded once and kept alive by self.
         self._tab_images = []
@@ -2032,6 +2035,8 @@ class FileListerApp:
             (self.update_tab, "Update", "update.png"),
             (self.missing_online_tab, "To Download", "download.png"),
             (dup_tab, "Duplicates", "duplicates.png"),
+            # VideoSnapper tabs intentionally have no separate icons so they
+            # inherit the FileLister notebook styling.
         ]
 
         for tab, label, filename in tab_defs:
@@ -2059,9 +2064,14 @@ class FileListerApp:
         self.setup_missing_online_tab(self.missing_online_tab)
         self.setup_duplicates_tab(dup_tab)
         self.build_gallery_ui()
+        self.videosnapper = VideoSnapperTabs(self, self.notebook)
 
     def on_tab_changed(self, event):
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
+
+        if selected_tab == "Contact Sheet" or selected_tab == "Cover Creator":
+            # VideoSnapper owns its controls; nothing else needs to be refreshed.
+            return
 
         if selected_tab == "Statistics":
             self.update_db_statistics()
@@ -4539,6 +4549,8 @@ class FileListerApp:
 
     def on_app_close(self):
         try:
+            if hasattr(self, "videosnapper"):
+                self.videosnapper.save_settings()
             # Destroy matplotlib canvas safely
             if hasattr(self, "chart_canvas") and self.chart_canvas:
                 self.chart_canvas.get_tk_widget().destroy()

@@ -25,7 +25,7 @@ a = Analysis(
         ('assets/tab_icons/download.png', 'assets/tab_icons'),
         ('assets/tab_icons/duplicates.png', 'assets/tab_icons'),
     ],
-    hiddenimports=[],
+    hiddenimports=['videosnapper', 'videosnapper.tabs', 'videosnapper.worker', 'videosnapper.ffmpeg_utils'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
