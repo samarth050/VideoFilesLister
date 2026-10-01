@@ -264,6 +264,47 @@ class VideoSnapperTabs:
         except Exception as exc:
             self.root.after(0, lambda exc=exc: self._generation_failed(exc))
 
+    def generate_contact_sheet_for_cover(self, video, on_complete):
+        if self._generation_running:
+            messagebox.showinfo("Busy", "VideoSnapper is already generating snapshots.", parent=self.root)
+            return
+        if not os.path.isfile(video):
+            messagebox.showerror("Invalid video file", "The selected video path must be a file.", parent=self.root)
+            return
+
+        try:
+            rows = max(1, min(20, int(self.rows_var.get())))
+            cols = max(1, min(20, int(self.cols_var.get())))
+        except Exception:
+            messagebox.showerror("Invalid grid", "Rows and columns must be valid numbers.", parent=self.root)
+            return
+
+        output_file = tempfile.NamedTemporaryFile(suffix="_contact_sheet.jpg", delete=False).name
+        self._generation_running = True
+        self.progress.configure(value=0)
+        self.status.configure(text="Generating Cover 2 contact sheet...")
+        threading.Thread(
+            target=self._generate_cover_sheet_worker,
+            args=(video, output_file, rows, cols, on_complete),
+            daemon=True,
+        ).start()
+
+    def _generate_cover_sheet_worker(self, video, output_file, rows, cols, on_complete):
+        try:
+            generate_sheet(video, output_file, rows, cols, self.update_progress, self.update_status)
+            self.root.after(0, lambda: self._cover_sheet_generation_complete(output_file, on_complete))
+        except Exception as exc:
+            try:
+                os.remove(output_file)
+            except OSError:
+                pass
+            self.root.after(0, lambda exc=exc: self._generation_failed(exc))
+
+    def _cover_sheet_generation_complete(self, output_file, on_complete):
+        self._generation_running = False
+        self.status.configure(text="Ready")
+        on_complete(output_file)
+
     def _generation_complete(self):
         self._generation_running = False
         self.show_preview(self.preview_file, self.sheet_preview)

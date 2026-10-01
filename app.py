@@ -1405,6 +1405,147 @@ class FileListerApp:
         except Exception as e:
             messagebox.showerror("Error", str(e)) 
 
+    def generate_cover2_contact_sheet(self):
+        if not self.selected_file_id:
+            messagebox.showwarning("Select Record", "Select a record first.")
+            return
+
+        file_id = self.selected_file_id
+        try:
+            conn = self.get_connection()
+            cur = conn.cursor()
+            cur.execute(
+                "SELECT file_name, extension, size_bytes, storage_id, full_path "
+                "FROM Files WHERE id=?",
+                (file_id,)
+            )
+            row = cur.fetchone()
+            conn.close()
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+            return
+
+        if not row:
+            messagebox.showerror("Video Not Found", "The selected record could not be found in the database.")
+            return
+
+        file_name, extension, size_bytes, storage_id, video_path = row
+        if video_path and os.path.isfile(video_path):
+            self._start_cover2_sheet_generation(file_id, video_path)
+            return
+
+        self.status_var.set(f"Searching {storage_id or 'media'} for {file_name}{extension}...")
+        threading.Thread(
+            target=self._find_cover2_video_worker,
+            args=(file_id, file_name, extension, size_bytes, storage_id, video_path),
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _search_video_roots(roots, file_name, extension, size_bytes, full_path):
+        if extension and extension.upper() == "DVD":
+            return None
+
+        names = set()
+        if full_path:
+            names.add(os.path.basename(full_path).casefold())
+        db_name = file_name or ""
+        if extension and not db_name.casefold().endswith(extension.casefold()):
+            db_name += extension
+        if db_name:
+            names.add(db_name.casefold())
+
+        if not names:
+            return None
+
+        stored_path = full_path or ""
+        _, relative_path = os.path.splitdrive(stored_path)
+        relative_path = relative_path.lstrip("\\/")
+        for root in roots:
+            if relative_path:
+                candidate = os.path.join(root, relative_path)
+                if os.path.isfile(candidate):
+                    return candidate
+
+        expected_size = int(size_bytes or 0)
+        for root in roots:
+            for directory, _, filenames in os.walk(root, onerror=lambda error: None):
+                for filename in filenames:
+                    if filename.casefold() not in names:
+                        continue
+                    candidate = os.path.join(directory, filename)
+                    if expected_size:
+                        try:
+                            if os.path.getsize(candidate) != expected_size:
+                                continue
+                        except OSError:
+                            continue
+                    return candidate
+        return None
+
+    def _find_cover2_video_worker(self, file_id, file_name, extension, size_bytes, storage_id, full_path):
+        storage_id = (storage_id or "").strip().casefold()
+        roots = []
+        if storage_id:
+            for drive_letter in "ABCDEFGHIJKLMNOPQRSTUVWXYZ":
+                root = f"{drive_letter}:\\"
+                if not os.path.isdir(root):
+                    continue
+                try:
+                    if detect_storage_id_from_path(root).strip().casefold() == storage_id:
+                        roots.append(root)
+                except Exception:
+                    continue
+
+        video_path = self._search_video_roots(
+            roots, file_name, extension, size_bytes, full_path
+        )
+        self.root.after(
+            0,
+            lambda: self._on_cover2_video_found(file_id, video_path)
+        )
+
+    def _on_cover2_video_found(self, file_id, video_path):
+        if self.selected_file_id != file_id:
+            self.status_var.set("Video lookup finished, but the selected record changed.")
+            return
+
+        if video_path:
+            self._start_cover2_sheet_generation(file_id, video_path)
+            return
+
+        video_path = filedialog.askopenfilename(
+            title="Locate Video for Contact Sheet",
+            filetypes=[
+                ("Video files", "*.mp4 *.mkv *.avi *.mov *.mpg *.mpeg *.wmv *.flv *.webm *.m4v *.3gp *.ts *.divx *.vob"),
+                ("All files", "*.*"),
+            ],
+            parent=self.root,
+        )
+        if video_path and os.path.isfile(video_path):
+            self._start_cover2_sheet_generation(file_id, video_path)
+        else:
+            self.status_var.set("Video not located. Cover 2 was not changed.")
+
+    def _start_cover2_sheet_generation(self, file_id, video_path):
+        if self.selected_file_id != file_id:
+            self.status_var.set("The selected record changed before contact sheet generation started.")
+            return
+
+        self.videosnapper.generate_contact_sheet_for_cover(
+            video_path,
+            lambda image_path: self._use_generated_cover2(file_id, image_path)
+        )
+
+    def _use_generated_cover2(self, file_id, image_path):
+        if self.selected_file_id != file_id:
+            self.status_var.set("Contact sheet generated, but the selected record changed.")
+            return
+
+        self.cover2_local_path.set(image_path)
+        self.display_image_from_file(image_path, self.image_label2)
+        self.status_var.set("Generated contact sheet staged as Cover 2. Save Metadata to keep it.")
+
     def update_filelist_statistics(self, files_info):
         """
         files_info = self.all_files_info
@@ -5769,6 +5910,18 @@ class FileListerApp:
             column=2,
             sticky="e",
             padx=0,
+            pady=2
+        )
+
+        ttk.Button(
+            left_form,
+            text="Generate Sheet",
+            command=self.generate_cover2_contact_sheet
+        ).grid(
+            row=4,
+            column=3,
+            sticky="w",
+            padx=(6, 0),
             pady=2
         )
 

@@ -42,6 +42,8 @@ def get_video_info(video_file):
         cmd,
         capture_output=True,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         **WIN_SUBPROCESS_KWARGS
     )
 
