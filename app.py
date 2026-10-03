@@ -27,6 +27,7 @@ import subprocess
 import threading
 import sys
 import datetime
+import tempfile
 from pathlib import Path
 from collections import defaultdict
 from functools import partial
@@ -1268,6 +1269,34 @@ class FileListerApp:
         except:
             pass
 
+    @staticmethod
+    def _copy_metadata_cover(source, destination, file_id, cover_number):
+        if os.path.exists(destination) and os.path.samefile(source, destination):
+            return destination
+
+        try:
+            shutil.copy2(source, destination)
+            return destination
+        except OSError as exc:
+            if getattr(exc, "winerror", None) != 32:
+                raise
+
+        handle, fallback = tempfile.mkstemp(
+            prefix=f"{file_id}_cover{cover_number}_",
+            suffix=os.path.splitext(source)[1],
+            dir=os.path.dirname(destination),
+        )
+        os.close(handle)
+        try:
+            shutil.copy2(source, fallback)
+        except Exception:
+            try:
+                os.remove(fallback)
+            except OSError:
+                pass
+            raise
+        return fallback
+
     def _update_progress(self, current, total):
         self.progress_var.set(current)
         self.progress_label.config(text=f"{current} / {total}")
@@ -1360,12 +1389,16 @@ class FileListerApp:
             if cover1_source and os.path.exists(cover1_source):
                 ext1 = os.path.splitext(cover1_source)[1]
                 cover1_dest = os.path.join(covers_folder, f"{file_id}_cover1{ext1}")
-                shutil.copy2(cover1_source, cover1_dest)
+                cover1_dest = self._copy_metadata_cover(
+                    cover1_source, cover1_dest, file_id, 1
+                )
 
             if cover2_source and os.path.exists(cover2_source):
                 ext2 = os.path.splitext(cover2_source)[1]
                 cover2_dest = os.path.join(covers_folder, f"{file_id}_cover2{ext2}")
-                shutil.copy2(cover2_source, cover2_dest)
+                cover2_dest = self._copy_metadata_cover(
+                    cover2_source, cover2_dest, file_id, 2
+                )
 
             # --------------------------------------
             # 🗄 Upsert MovieDetails (UPDATED)
