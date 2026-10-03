@@ -43,6 +43,7 @@ class VideoSnapperTabs:
         self.font_color_var = tk.StringVar(value="white")
         self.cover_sample_font = tkfont.Font(family="Arial", size=48)
         self._generation_running = False
+        self._video_path_request = 0
 
         self.contact_tab = ttk.Frame(notebook, style="Main.TFrame")
         self.cover_tab = ttk.Frame(notebook, style="Main.TFrame")
@@ -196,6 +197,89 @@ class VideoSnapperTabs:
         self.video_var.set(data)
 
     # ---------- File selection ----------
+    def populate_video_path_from_selected_record(self):
+        self._video_path_request += 1
+        request_id = self._video_path_request
+        file_id = self.app.selected_file_id
+        if file_id is None or not self.app.current_db_path:
+            return
+
+        try:
+            conn = self.app.get_connection()
+            try:
+                row = conn.execute(
+                    "SELECT file_name, extension, size_bytes, storage_id, full_path "
+                    "FROM Files WHERE id = ?",
+                    (file_id,),
+                ).fetchone()
+            finally:
+                conn.close()
+        except Exception as exc:
+            messagebox.showerror("Video Path Lookup Failed", str(exc), parent=self.root)
+            return
+
+        if not row:
+            return
+
+        file_name, extension, size_bytes, storage_id, full_path = row
+        storage_id = (storage_id or "").strip()
+        if not storage_id:
+            return
+
+        previous_path = self.video_var.get()
+        threading.Thread(
+            target=self._find_selected_video_path,
+            args=(
+                request_id, file_id, previous_path, file_name, extension,
+                size_bytes, storage_id, full_path,
+            ),
+            daemon=True,
+        ).start()
+
+    def _find_selected_video_path(
+        self, request_id, file_id, previous_path, file_name, extension,
+        size_bytes, storage_id, full_path
+    ):
+        try:
+            video_path = self.app.find_video_path_for_storage(
+                file_name, extension, size_bytes, storage_id, full_path
+            )
+            self.root.after(
+                0,
+                lambda: self._apply_selected_video_path(
+                    request_id, file_id, previous_path, storage_id, video_path
+                ),
+            )
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda error=exc: messagebox.showerror(
+                    "Video Path Lookup Failed", str(error), parent=self.root
+                ),
+            )
+
+    def _apply_selected_video_path(
+        self, request_id, file_id, previous_path, storage_id, video_path
+    ):
+        if request_id != self._video_path_request:
+            return
+        if self.app.selected_file_id != file_id:
+            return
+        if self.video_var.get() != previous_path:
+            return
+        if self.notebook.tab(self.notebook.select(), "text") not in (
+            "Contact Sheet", "Cover Creator"
+        ):
+            return
+
+        if video_path:
+            self.video_var.set(video_path)
+            self.status.configure(text=f"Selected video loaded from {storage_id}.")
+        else:
+            self.status.configure(
+                text=f"Selected video not found on attached storage '{storage_id}'."
+            )
+
     def select_video(self):
         path = filedialog.askopenfilename(
             title="Select Video",

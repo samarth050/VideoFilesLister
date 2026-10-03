@@ -1484,6 +1484,15 @@ class FileListerApp:
         return None
 
     def _find_cover2_video_worker(self, file_id, file_name, extension, size_bytes, storage_id, full_path):
+        video_path = self.find_video_path_for_storage(
+            file_name, extension, size_bytes, storage_id, full_path
+        )
+        self.root.after(
+            0,
+            lambda: self._on_cover2_video_found(file_id, video_path)
+        )
+
+    def find_video_path_for_storage(self, file_name, extension, size_bytes, storage_id, full_path):
         storage_id = (storage_id or "").strip().casefold()
         roots = []
         if storage_id:
@@ -1497,12 +1506,8 @@ class FileListerApp:
                 except Exception:
                     continue
 
-        video_path = self._search_video_roots(
+        return self._search_video_roots(
             roots, file_name, extension, size_bytes, full_path
-        )
-        self.root.after(
-            0,
-            lambda: self._on_cover2_video_found(file_id, video_path)
         )
 
     def _on_cover2_video_found(self, file_id, video_path):
@@ -2211,7 +2216,7 @@ class FileListerApp:
         selected_tab = self.notebook.tab(self.notebook.select(), "text")
 
         if selected_tab == "Contact Sheet" or selected_tab == "Cover Creator":
-            # VideoSnapper owns its controls; nothing else needs to be refreshed.
+            self.videosnapper.populate_video_path_from_selected_record()
             return
 
         if selected_tab == "Statistics":
