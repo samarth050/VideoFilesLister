@@ -52,6 +52,7 @@ KNOWN_CATEGORIES = [
 
     "Action",
     "Adventure",
+    "Animation",
     "Comedy",
     "Crime, Incest",
     "Crime",
@@ -63,6 +64,7 @@ KNOWN_CATEGORIES = [
     "Mystery",
     "Romance",
     "Sci-Fi",
+    "Short",
     "Thriller",
     "Asian, Incest",
     "Asian",
@@ -221,6 +223,7 @@ def _scrape_imdb_movie(url, timeout):
             title(id: $id) {
                 titleText { text }
                 releaseYear { year }
+                titleType { text id }
                 genres { genres { text } }
                 plot { plotText { plainText } }
                 primaryImage { url }
@@ -251,6 +254,13 @@ def _scrape_imdb_movie(url, timeout):
         for item in genre_data
         if isinstance(item, dict) and item.get("text", "").strip()
     ]
+    title_type = title.get("titleType") or {}
+    if isinstance(title_type, dict) and (
+        str(title_type.get("text", "")).strip().casefold() == "short"
+        or str(title_type.get("id", "")).strip().casefold() == "short"
+    ):
+        if not any(genre.casefold() == "short" for genre in genres):
+            genres.append("Short")
     plot = (title.get("plot") or {}).get("plotText") or {}
     plot = plot.get("plainText", "")
     primary_image = title.get("primaryImage") or {}

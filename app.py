@@ -31,6 +31,7 @@ import tempfile
 from pathlib import Path
 from collections import defaultdict
 from functools import partial
+from urllib.parse import urlparse
 
 # ===============================
 # Third-Party Libraries
@@ -162,6 +163,7 @@ from utils.helpers import (
 
 from utils.movie_scraper import scrape_movie, scrape_category_urls
 from videosnapper.tabs import VideoSnapperTabs
+from videosnapper.worker import generate_sheet
 
 class ExportDialog:
     def __init__(self, parent, options):
@@ -1035,12 +1037,143 @@ class FileListerApp:
         try:
             data = scrape_movie(url)
             self._persist_fetched_metadata(file_id, url, data)
-
-            # UI update safely
-            self.root.after(0, lambda: self._fetch_metadata_ui_update(file_id))
-
         except Exception as e:
-            self.root.after(0, lambda: messagebox.showerror("Error", str(e)))
+            self.root.after(0, lambda e=e: messagebox.showerror("Error", str(e)))
+            return
+
+        self.root.after(0, lambda: self._fetch_metadata_ui_update(file_id))
+        try:
+            self._queue_auto_cover2_generation(file_id, url, data)
+        except Exception as exc:
+            self.root.after(
+                0,
+                lambda exc=exc: self._auto_cover2_generation_failed(file_id, exc)
+            )
+
+    def _queue_auto_cover2_generation(self, file_id, url, data):
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        if host not in {"imdb.com", "themoviedb.org"} or len(data.get("images") or []) != 1:
+            return
+
+        conn = self.get_connection()
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                SELECT f.file_name, f.extension, f.size_bytes, f.storage_id, f.full_path,
+                       m.cover1_path, m.cover2_path
+                FROM Files f
+                LEFT JOIN MovieDetails m ON m.file_id = f.id
+                WHERE f.id=?
+                """,
+                (file_id,)
+            )
+            row = cur.fetchone()
+        finally:
+            conn.close()
+
+        if not row or not row[5] or row[6]:
+            return
+
+        file_name, extension, size_bytes, storage_id, full_path = row[:5]
+        video_path = full_path if full_path and os.path.isfile(full_path) else None
+        if not video_path:
+            video_path = self.find_video_path_for_storage(
+                file_name, extension, size_bytes, storage_id, full_path
+            )
+        if video_path:
+            self.root.after(
+                0,
+                lambda video_path=video_path: self._start_auto_cover2_generation(file_id, video_path)
+            )
+
+    def _start_auto_cover2_generation(self, file_id, video_path):
+        if not os.path.isfile(video_path):
+            return
+
+        try:
+            rows = max(1, min(20, int(self.videosnapper.rows_var.get())))
+            cols = max(1, min(20, int(self.videosnapper.cols_var.get())))
+        except (TypeError, ValueError) as exc:
+            self._auto_cover2_generation_failed(file_id, exc)
+            return
+
+        output_file = tempfile.NamedTemporaryFile(
+            suffix="_cover2.jpg", delete=False
+        ).name
+        threading.Thread(
+            target=self._auto_cover2_generation_worker,
+            args=(file_id, video_path, output_file, rows, cols),
+            daemon=True,
+        ).start()
+
+    def _auto_cover2_generation_worker(self, file_id, video_path, output_file, rows, cols):
+        try:
+            generate_sheet(
+                video_path,
+                output_file,
+                rows,
+                cols,
+                progress_callback=lambda _progress: None,
+                status_callback=lambda _status: None,
+            )
+            self.root.after(
+                0,
+                lambda: self._persist_auto_generated_cover2(file_id, output_file)
+            )
+        except Exception as exc:
+            try:
+                os.remove(output_file)
+            except OSError:
+                pass
+            self.root.after(
+                0,
+                lambda exc=exc: self._auto_cover2_generation_failed(file_id, exc)
+            )
+
+    def _persist_auto_generated_cover2(self, file_id, image_path):
+        persisted = False
+        try:
+            conn = self.get_connection()
+            try:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT cover2_path FROM MovieDetails WHERE file_id=?",
+                    (file_id,)
+                )
+                row = cur.fetchone()
+                if row and not row[0]:
+                    cover2_path = self.get_cover_file_path(f"{file_id}_2.jpg")
+                    shutil.copy2(image_path, cover2_path)
+                    cur.execute(
+                        """
+                        UPDATE MovieDetails
+                        SET cover2_path=?
+                        WHERE file_id=? AND (cover2_path IS NULL OR cover2_path='')
+                        """,
+                        (self.make_cover_db_path(cover2_path), file_id)
+                    )
+                    persisted = cur.rowcount == 1
+                    conn.commit()
+            finally:
+                conn.close()
+
+            if persisted:
+                self.refresh_ui_after_db_update(file_id)
+                if self.selected_file_id == file_id:
+                    self.status_var.set("Cover 2 was generated from the attached media.")
+        except Exception as exc:
+            self._auto_cover2_generation_failed(file_id, exc)
+        finally:
+            try:
+                os.remove(image_path)
+            except OSError:
+                pass
+
+    def _auto_cover2_generation_failed(self, file_id, error):
+        if self.selected_file_id == file_id:
+            self.status_var.set(f"Automatic Cover 2 generation failed: {error}")
+        messagebox.showerror("Cover 2 Generation Failed", str(error))
 
     def _fetch_metadata_ui_update(self, file_id):
         self.refresh_ui_after_db_update(file_id)

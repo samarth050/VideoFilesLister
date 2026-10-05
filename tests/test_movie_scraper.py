@@ -47,6 +47,12 @@ class MovieScraperCategoryTests(unittest.TestCase):
             self._scrape_category("Documentary")["category"], "Documentary"
         )
 
+    def test_scrape_movie_classifies_short(self):
+        self.assertEqual(self._scrape_category("Short")["category"], "Short")
+
+    def test_scrape_movie_classifies_animation(self):
+        self.assertEqual(self._scrape_category("Animation")["category"], "Animation")
+
     def test_scrape_adult_film_database_video_page(self):
         html = """
             <html><body>
@@ -140,6 +146,27 @@ class MovieScraperCategoryTests(unittest.TestCase):
         post.assert_called_once()
         get.assert_not_called()
         self.assertEqual(post.call_args.kwargs["json"]["variables"]["id"], "tt0160208")
+
+    def test_scrape_imdb_short_title_type(self):
+        class GraphQLResponse:
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "data": {
+                        "title": {
+                            "titleText": {"text": "Animated Short"},
+                            "titleType": {"text": "Short", "id": "short"},
+                            "genres": {"genres": [{"text": "Animation"}]},
+                        }
+                    }
+                }
+
+        with patch("utils.movie_scraper.SESSION.post", return_value=GraphQLResponse()):
+            data = scrape_movie("https://www.imdb.com/title/tt1234567")
+
+        self.assertEqual(data["category"], "Animation, Short")
 
 
 if __name__ == "__main__":
