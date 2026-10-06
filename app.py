@@ -113,6 +113,8 @@ except ImportError:
 # Internal Modules
 # ===============================
 
+from statistics_dashboard import StatisticsDashboard
+
 from db.schema import (
     DROP_METADATA_VIEW,
     FILES_TABLE_SQL,
@@ -1773,46 +1775,6 @@ class FileListerApp:
                 )
 
                 
-    def update_storage_statistics(self):
-        if not self.current_db_path or not os.path.exists(self.current_db_path):
-            return
-
-        # Clear old
-        for i in self.db_storage_tree.get_children():
-            self.db_storage_tree.delete(i)
-
-        try:
-            conn = self.get_connection()
-            cur = conn.cursor()
-
-            cur.execute(SELECT_STORAGE_STATS)
-
-            rows = cur.fetchall()
-            conn.close()
-
-            total_files = 0
-            total_size = 0
-
-            for sid, cnt, size in rows:
-                total_files += cnt
-                total_size += size or 0
-
-                self.db_storage_tree.insert(
-                    "", "end",
-                    values=(sid, cnt, format_size(size))
-                )
-
-            # Optional TOTAL row
-            self.db_storage_tree.insert(
-                "", "end",
-                values=("TOTAL", total_files, format_size(total_size))
-            )
-
-        except Exception as e:
-            print("Storage stats error:", e)
-
-
-
     def extract_year_from_filename(self, filename):
         matches = re.findall(r'(19\d{2}|20\d{2})', filename)
         if matches:
@@ -2387,10 +2349,7 @@ class FileListerApp:
 
         if selected_tab == "Statistics":
             self.update_db_statistics()
-            self.update_storage_statistics()
-            self.update_category_statistics()
             self.update_status_bar_db_info()
-            self.draw_extension_pie_chart()
 
         elif selected_tab == "SQLite Viewer":
             if self.current_db_path:
@@ -3754,151 +3713,32 @@ class FileListerApp:
             return False
 
     def update_category_statistics(self):
-
-        if not self.current_db_path:
-            return
-
-        try:
-            conn = self.get_connection()
-            cur = conn.cursor()
-
-            cur.execute("""
-                SELECT COALESCE(m.category,f.category) AS cat,
-                    COUNT(*)
-                FROM Files f
-                LEFT JOIN MovieDetails m
-                ON f.id = m.file_id
-                WHERE cat IS NOT NULL AND TRIM(cat) != ''
-                GROUP BY cat
-                ORDER BY COUNT(*) DESC
-            """)
-
-            rows = cur.fetchall()
-            conn.close()
-
-            self.category_tree.delete(*self.category_tree.get_children())
-
-            for cat, cnt in rows:
-                self.category_tree.insert("", "end", values=(cat, cnt))
-
-        except Exception as e:
-            print("Category stats error:", e)   
+        """Refresh statistics dashboard data (legacy entry point)."""
+        dashboard = getattr(self, "statistics_dashboard", None)
+        if dashboard is not None:
+            dashboard.refresh()
 
     def setup_stats_tab(self, parent):
+        """Build the responsive database statistics dashboard.
+
+        The dashboard is isolated in ``statistics_dashboard.py`` so the
+        existing FileLister tabs, database operations and VideoSnapper tabs
+        remain untouched.  Compatibility attributes are exposed by the
+        dashboard for older code paths that still call the legacy statistics
+        methods.
         """
-        summary = tk.Frame(parent)
-        summary.pack(fill="x", pady=5)
+        self.statistics_dashboard = StatisticsDashboard(self, parent)
 
-        self.total_files_var = tk.StringVar(value="Total Files: 0")
-        self.total_size_var = tk.StringVar(value="Total Size: 0 bytes")
-
-        tk.Label(summary, textvariable=self.total_files_var, font=("Arial", 10, "bold")).pack(anchor="w")
-        tk.Label(summary, textvariable=self.total_size_var, font=("Arial", 10, "bold")).pack(anchor="w")
-
-        ext_frame = tk.Frame(parent)
-        ext_frame.pack(fill="both", expand=True)
-
-        tk.Label(ext_frame, text="Files By Extension:", font=("Arial", 10, "bold")).pack(anchor="w", pady=4)
-
-        columns = ("Extension", "Count", "Total Size")
-        self.ext_tree = ttk.Treeview(ext_frame, columns=columns, show="headings")
-
-        for col in columns:
-            self.ext_tree.heading(col, text=col)
-            self.ext_tree.column(col, width=160)
-
-        scroll = ttk.Scrollbar(ext_frame, command=self.ext_tree.yview)
-        self.ext_tree.configure(yscrollcommand=scroll.set)
-
-        self.ext_tree.pack(side="left", fill="both", expand=True)
-        scroll.pack(side="right", fill="y")
-    """
-        # -------- DATABASE STATISTICS ----------
-        db_frame = tk.LabelFrame(parent, text="Database Statistics")
-        db_frame.pack(fill="both", expand=True, padx=6, pady=6)
-
-        '''        self.db_total_records_var = tk.StringVar(value="DB Records: 0")
-        tk.Label(db_frame, textvariable=self.db_total_records_var,
-             font=("Arial", 10, "bold")).pack(anchor="w")
-        '''
-
-        db_cols = ("Extension", "Count", "Total Size")
-        self.db_ext_tree = ttk.Treeview(db_frame, columns=db_cols, show="headings")
-
-        for col in db_cols:
-            self.db_ext_tree.heading(col, text=col)
-            self.db_ext_tree.column(col, width=180)
-
-        db_scroll = ttk.Scrollbar(db_frame, command=self.db_ext_tree.yview)
-        self.db_ext_tree.configure(yscrollcommand=db_scroll.set)
-
-        self.db_ext_tree.pack(side="left", fill="both", expand=True)
-        db_scroll.pack(side="right", fill="y") 
-
-        self.db_total_records_var = tk.StringVar(value="DB Records: 0")
-        tk.Label(db_frame, textvariable=self.db_total_records_var,
-            font=("Arial", 10, "bold")).pack(anchor="w")
-
-        self.db_files_size_var = tk.StringVar(value="Total Files Size: 0 MB")
-        tk.Label(db_frame, textvariable=self.db_files_size_var,
-            font=("Arial", 9, "bold")).pack(anchor="w")
-
-        self.db_size_var = tk.StringVar(value="DB Size: 0 MB")
-        tk.Label(db_frame, textvariable=self.db_size_var,
-         font=("Arial", 9)).pack(anchor="w")
-        
-        # ---------------- STORAGE-WISE STATS ----------------
-        storage_frame = ttk.LabelFrame(parent, text="Storage Summary")
-        storage_frame.pack(fill="x", padx=8, pady=6)
-
-        self.db_storage_tree = ttk.Treeview(
-            storage_frame,
-            columns=("Storage", "Files", "Total Size"),
-            show="headings",
-            height=4
-        )
-        self.db_storage_tree.pack(fill="x", padx=6, pady=4)
-
-        self.db_storage_tree.heading("Storage", text="Storage ID")
-        self.db_storage_tree.heading("Files", text="File Count")
-        self.db_storage_tree.heading("Total Size", text="Total Size")
-
-        self.db_storage_tree.column("Storage", width=200, anchor="w")
-        self.db_storage_tree.column("Files", width=100, anchor="e")
-        self.db_storage_tree.column("Total Size", width=140, anchor="e")
-        # ---------------- CATEGORY STATISTICS ----------------
-        category_frame = ttk.LabelFrame(parent, text="Category Distribution")
-        category_frame.pack(fill="x", padx=8, pady=6)
-
-        self.category_tree = ttk.Treeview(
-            category_frame,
-            columns=("Category", "Movies"),
-            show="headings",
-            height=6
-        )
-
-        self.category_tree.pack(fill="x", padx=6, pady=4)
-
-        self.category_tree.heading("Category", text="Category")
-        self.category_tree.heading("Movies", text="Movie Count")
-
-        self.category_tree.column("Category", width=240, anchor="w")
-        self.category_tree.column("Movies", width=120, anchor="e")        
-
-        tk.Button(parent, text="Export Statistics to Excel",
-          command=self.export_db_statistics_to_excel).pack(anchor="w", padx=6, pady=4)
-
-
-        chart_frame = tk.LabelFrame(parent, text="Extension Distribution (DB)")
-        chart_frame.pack(fill="both", expand=True, padx=6, pady=6)
-
+        # Preserve the legacy attribute names used by existing methods and
+        # integrations.  The dashboard owns the actual widgets/data.
+        self.db_ext_tree = self.statistics_dashboard.db_ext_tree
+        self.db_storage_tree = self.statistics_dashboard.db_storage_tree
+        self.category_tree = self.statistics_dashboard.category_tree
+        self.db_total_records_var = self.statistics_dashboard.db_total_records_var
+        self.db_files_size_var = self.statistics_dashboard.db_files_size_var
+        self.db_size_var = self.statistics_dashboard.db_size_var
         self.chart_canvas = None
-        tk.Button(chart_frame, text="Refresh Pie Chart",
-          command=self.draw_extension_pie_chart).pack(anchor="w", padx=4, pady=4)
-
-
-        self.chart_container = tk.Frame(chart_frame)
-        self.chart_container.pack(fill="both", expand=True)
+        self.chart_container = None
 
     def setup_missing_online_tab(self, parent):
         top = tk.Frame(parent)
@@ -4745,100 +4585,23 @@ class FileListerApp:
 
 
     def draw_extension_pie_chart(self):
-        if not self.current_db_path or not os.path.exists(self.current_db_path):
-            return
-
-        try:
-            conn = self.get_connection()
-            cur = conn.cursor()
-
-            cur.execute("""
-                SELECT extension, COUNT(*)
-                FROM Files
-                GROUP BY extension
-                """)
-            rows = cur.fetchall()
-            conn.close()
-
-            if not rows:
-                return
-
-            labels = [r[0] for r in rows]
-            sizes = [r[1] for r in rows]
-
-            plt.close("all")  # prevent orphan figures
-            fig, ax = plt.subplots(figsize=(5, 4))
-
-            ax.pie(sizes, labels=labels, autopct="%1.1f%%", startangle=140)
-            ax.set_title("Files by Extension")
-
-            if self.chart_canvas:
-                self.chart_canvas.get_tk_widget().destroy()
-
-            self.chart_canvas = FigureCanvasTkAgg(fig, master=self.chart_container)
-            self.chart_canvas.draw()
-            self.chart_canvas.get_tk_widget().pack(fill="both", expand=True)
-
-        except Exception as e:
-            self.status_var.set(f"Chart error: {e}")
+        """Legacy chart refresh entry point; dashboard now uses Tk canvas bars."""
+        dashboard = getattr(self, "statistics_dashboard", None)
+        if dashboard is not None:
+            dashboard.refresh()
 
     def update_db_statistics(self):
-        # Clear old rows
-        for i in self.db_ext_tree.get_children():
-            self.db_ext_tree.delete(i)
-
-        # Clear storage stats
-        if hasattr(self, "db_storage_tree"):
-            for i in self.db_storage_tree.get_children():
-                self.db_storage_tree.delete(i)
-
-
-        if not self.current_db_path or not os.path.exists(self.current_db_path):
-            self.db_total_records_var.set("DB Records: 0")
-            self.db_size_var.set("DB Size: 0 MB")
-            self.db_files_size_var.set("Total Files Size: 0 MB")
+        """Refresh the complete database statistics dashboard."""
+        dashboard = getattr(self, "statistics_dashboard", None)
+        if dashboard is None:
             return
+        dashboard.refresh()
 
-        try:
-            # DB size
-            size_mb = os.path.getsize(self.current_db_path) / (1024 * 1024)
-            self.db_size_var.set(f"DB Size: {size_mb:.2f} MB")
-
-            conn = self.get_connection()
-            cur = conn.cursor()
-           
-            # Total records
-            cur.execute(SELECT_TOTAL_COUNT)
-            total = cur.fetchone()[0]
-            self.db_total_records_var.set(f"DB Records: {total}")
-
-            # Total size of ALL files in DB
-            cur.execute(SELECT_TOTAL_SIZE)
-            total_bytes = cur.fetchone()[0]
-
-            formatted = format_db_total_size(total_bytes)
-            self.db_files_size_var.set(
-                f"Total Files Size: {formatted}"# ({total_bytes:,} bytes)" #Include if size required in bytes
-            )
-
-            # Per-extension stats
-            cur.execute(SELECT_EXTENSION_STATS)
-            rows = cur.fetchall()
-            conn.close()
-
-            for ext, cnt, size in rows:
-                self.db_ext_tree.insert(
-                    "", "end",
-                    values=(ext, cnt, format_size(size))
-                    )
-            
-            self.update_storage_statistics()  
-        except Exception as e:
-            self.db_total_records_var.set("DB Records: Error")
-            self.db_size_var.set("DB Size: Error")
-            self.status_var.set(f"DB stats error: {e}")
-          
-   
+    def update_storage_statistics(self):
+        """Legacy storage-statistics entry point; refreshes the dashboard."""
+        dashboard = getattr(self, "statistics_dashboard", None)
+        if dashboard is not None:
+            dashboard.refresh()
 
     def update_status_bar_db_info(self):
         if not self.current_db_path or not os.path.exists(self.current_db_path):
