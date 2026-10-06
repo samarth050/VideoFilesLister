@@ -2457,6 +2457,117 @@ class FileListerApp:
         parent.configure(style="Main.TFrame")
 
         # -------------------------------------------------------------
+        # Scrollable Files List dashboard
+        #
+        # The Files List tab contains several horizontal sections. On
+        # smaller/lower-resolution displays the lower sections can fall
+        # below the notebook viewport. Keep the existing widgets and
+        # handlers intact, but place them inside a vertical scrolling
+        # canvas so every control remains accessible.
+        # -------------------------------------------------------------
+        scroll_host = tk.Frame(parent, bg=colors["background"])
+        scroll_host.pack(fill="both", expand=True)
+
+        files_canvas = tk.Canvas(
+            scroll_host,
+            bg=colors["background"],
+            highlightthickness=0,
+            bd=0
+        )
+        files_scrollbar = ttk.Scrollbar(
+            scroll_host,
+            orient="vertical",
+            command=files_canvas.yview
+        )
+        files_canvas.configure(yscrollcommand=files_scrollbar.set)
+
+        files_scrollbar.pack(side="right", fill="y")
+        files_canvas.pack(side="left", fill="both", expand=True)
+
+        scroll_content = tk.Frame(
+            files_canvas,
+            bg=colors["background"]
+        )
+        scroll_window = files_canvas.create_window(
+            (0, 0),
+            window=scroll_content,
+            anchor="nw"
+        )
+
+        def _update_files_scrollregion(_event=None):
+            files_canvas.configure(scrollregion=files_canvas.bbox("all"))
+
+        def _fit_files_content_width(event):
+            files_canvas.itemconfigure(scroll_window, width=event.width)
+
+        scroll_content.bind("<Configure>", _update_files_scrollregion)
+        files_canvas.bind("<Configure>", _fit_files_content_width)
+
+        # Store references for diagnostics/tests and future UI changes.
+        self.files_list_canvas = files_canvas
+        self.files_list_scrollbar = files_scrollbar
+        self.files_list_scroll_content = scroll_content
+
+        # Mouse-wheel support. Use bind_all so the wheel also works when
+        # the pointer is over labels, entries, buttons, comboboxes, etc.
+        # inside the canvas window. The handler is restricted to the
+        # visible Files List canvas, so other notebook tabs keep their
+        # existing mouse-wheel behaviour.
+        def _files_list_wheel_if_inside(event):
+            try:
+                if not files_canvas.winfo_ismapped():
+                    return
+
+                cx = files_canvas.winfo_rootx()
+                cy = files_canvas.winfo_rooty()
+                cw = files_canvas.winfo_width()
+                ch = files_canvas.winfo_height()
+                if not (cx <= event.x_root < cx + cw and cy <= event.y_root < cy + ch):
+                    return
+
+                # Let the file table retain its normal native wheel scrolling.
+                widget = self.root.winfo_containing(event.x_root, event.y_root)
+                current = widget
+                while current is not None:
+                    if current is getattr(self, "file_table", None):
+                        return
+                    current = getattr(current, "master", None)
+
+                if event.delta:
+                    files_canvas.yview_scroll(-int(event.delta / 120), "units")
+                return "break"
+            except Exception:
+                return
+
+        self._files_list_mousewheel_binding = self.root.bind_all(
+            "<MouseWheel>", _files_list_wheel_if_inside, add="+"
+        )
+
+        # Linux/X11 wheel events.
+        self._files_list_button4_binding = self.root.bind_all(
+            "<Button-4>",
+            lambda e: _files_list_wheel_if_inside(
+                type("WheelEvent", (), {
+                    "x_root": e.x_root, "y_root": e.y_root, "delta": 120
+                })()
+            ),
+            add="+"
+        )
+        self._files_list_button5_binding = self.root.bind_all(
+            "<Button-5>",
+            lambda e: _files_list_wheel_if_inside(
+                type("WheelEvent", (), {
+                    "x_root": e.x_root, "y_root": e.y_root, "delta": -120
+                })()
+            ),
+            add="+"
+        )
+
+        # Build the existing Files List UI inside the scrollable content
+        # frame. No existing widget names or command handlers are changed.
+        parent = scroll_content
+
+        # -------------------------------------------------------------
         # Scan toolbar
         # -------------------------------------------------------------
         folder_frame = tk.Frame(
