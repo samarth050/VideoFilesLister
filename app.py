@@ -5486,8 +5486,97 @@ class FileListerApp:
         Existing widget names and callbacks are preserved.
         """
 
+        # -------------------------------------------------------------
+        # Scrollable SQLite Viewer dashboard
+        #
+        # Keep all existing controls/callbacks intact, but place the
+        # complete viewer inside a vertical scrolling canvas. This makes
+        # the record list, pager, bulk-update controls and Movie Metadata
+        # section accessible on smaller/lower-resolution displays.
+        # -------------------------------------------------------------
+        scroll_host = tk.Frame(parent, bg=self.colors["background"])
+        scroll_host.pack(fill="both", expand=True)
+
+        db_canvas = tk.Canvas(
+            scroll_host,
+            bg=self.colors["background"],
+            highlightthickness=0,
+            bd=0
+        )
+        db_scrollbar = ttk.Scrollbar(
+            scroll_host,
+            orient="vertical",
+            command=db_canvas.yview
+        )
+        db_canvas.configure(yscrollcommand=db_scrollbar.set)
+
+        db_scrollbar.pack(side="right", fill="y")
+        db_canvas.pack(side="left", fill="both", expand=True)
+
+        scroll_content = tk.Frame(
+            db_canvas,
+            bg=self.colors["background"]
+        )
+        scroll_window = db_canvas.create_window(
+            (0, 0),
+            window=scroll_content,
+            anchor="nw"
+        )
+
+        def _update_db_scrollregion(_event=None):
+            db_canvas.configure(scrollregion=db_canvas.bbox("all"))
+
+        def _fit_db_content_width(event):
+            db_canvas.itemconfigure(scroll_window, width=event.width)
+
+        scroll_content.bind("<Configure>", _update_db_scrollregion)
+        db_canvas.bind("<Configure>", _fit_db_content_width)
+
+        # Keep references for diagnostics and future UI changes.
+        self.sqlite_viewer_canvas = db_canvas
+        self.sqlite_viewer_scrollbar = db_scrollbar
+        self.sqlite_viewer_scroll_content = scroll_content
+
+        # Mouse-wheel support. The outer viewer scrolls when the pointer
+        # is over any part of this tab, while the Treeview retains its own
+        # native row scrolling.
+        def _sqlite_viewer_wheel_if_inside(event):
+            try:
+                if not db_canvas.winfo_ismapped():
+                    return
+
+                cx = db_canvas.winfo_rootx()
+                cy = db_canvas.winfo_rooty()
+                cw = db_canvas.winfo_width()
+                ch = db_canvas.winfo_height()
+                if not (cx <= event.x_root < cx + cw and cy <= event.y_root < cy + ch):
+                    return
+
+                widget = self.root.winfo_containing(event.x_root, event.y_root)
+                current = widget
+                while current is not None:
+                    if current is getattr(self, "db_tree", None):
+                        return
+                    current = getattr(current, "master", None)
+
+                if event.delta:
+                    db_canvas.yview_scroll(-int(event.delta / 120), "units")
+                return "break"
+            except Exception:
+                return
+
+        self._sqlite_viewer_mousewheel_binding = self.root.bind_all(
+            "<MouseWheel>",
+            _sqlite_viewer_wheel_if_inside,
+            add="+"
+        )
+
         # ---------- Storage ID Filter ----------
-        filter_frame = tk.Frame(parent)
+        # All existing viewer widgets are deliberately created inside the
+        # scrollable content frame.
+        parent = scroll_content
+
+        filter_frame = tk.Frame(parent, bg=self.colors["background"])
         filter_frame.pack(fill="x", padx=8, pady=3)
 
         tk.Label(
@@ -5611,8 +5700,11 @@ class FileListerApp:
             page_size_entry,
         ]
 
-        # ---------- Records: fixed height 220 px ----------
-        tree_frame = tk.Frame(parent, height=220)
+        # ---------- Records: enlarged height ----------
+        # The record list is intentionally taller than before. The outer
+        # viewer scrollbar makes the metadata section below it accessible
+        # even on displays with limited vertical resolution.
+        tree_frame = tk.Frame(parent, height=340)
         tree_frame.pack(fill="x", padx=8, pady=2)
         tree_frame.pack_propagate(False)
 
@@ -5997,7 +6089,7 @@ class FileListerApp:
             relief="solid",
             bd=1
         )
-        self.image_label1._fl_image_size = (150, 190)
+        self.image_label1._fl_image_size = (210, 266)
         self.image_label1.pack(pady=2)
 
         cover2_frame = ttk.Frame(details_frame)
@@ -6014,7 +6106,7 @@ class FileListerApp:
             relief="solid",
             bd=1
         )
-        self.image_label2._fl_image_size = (150, 190)
+        self.image_label2._fl_image_size = (210, 266)
         self.image_label2.pack(pady=2)
 
     def _show_category_url_menu(self, event):
