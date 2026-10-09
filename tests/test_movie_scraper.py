@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import requests
 
-from utils.movie_scraper import extract_size_info, scrape_movie
+from utils.movie_scraper import extract_size_info, scrape_movie, scrape_category_entries
 
 
 class MovieScraperSizeTests(unittest.TestCase):
@@ -252,3 +252,51 @@ class MovieScraperCategoryTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RarelustLayoutStrategyTests(unittest.TestCase):
+    class _Response:
+        def __init__(self, html, url):
+            self.text = html
+            self.url = url
+
+        def raise_for_status(self):
+            pass
+
+    def test_inline_page_extracts_movies_without_rarelust_detail_links(self):
+        html = """<html><body><div class="entry-meta"><a rel="category tag">Asian</a></div>
+          <div class="entry-content">
+          <p>Black Out Tokyo Elevator Panic (1993) /Tôkyôdaiteiden: Erebêtâpanikku | <a href="https://www.imdb.com/title/tt0000001/">info</a></p>
+          <p>Starring: Rumi Mochizuki, Eri Kimura</p>
+          <p>Description: Two people are trapped in an elevator.</p>
+          <p>cover <img src="/covers/blackout-front.jpg"></p>
+          <p>Preview <img src="/covers/blackout-preview.jpg"></p>
+          <p>Dvdrip | 1.09GB | 69:12mins | avi</p>
+          <p>Taming the Younger Sister-in-Law (2020) | <a href="https://www.imdb.com/title/tt0000002/">info</a></p>
+          <p>Description: A woman discovers a secret.</p>
+          <p>cover <img src="/covers/taming-front.jpg"></p>
+          <p>Preview <img src="/covers/taming-preview.jpg"></p>
+          </div></body></html>"""
+        url = "https://rarelust.com/asian-movies/"
+        with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html, url)) as get:
+            entries = scrape_category_entries(url)
+        self.assertEqual(len(entries), 2)
+        self.assertTrue(entries[0]["_inline_listing"])
+        self.assertEqual(entries[0]["name"], "Black Out Tokyo Elevator Panic")
+        self.assertEqual(entries[0]["year"], "1993")
+        self.assertEqual(entries[0]["category"], "Asian")
+        self.assertEqual(entries[0]["description"], "Two people are trapped in an elevator")
+        self.assertEqual(entries[0]["cover1_url"], "https://rarelust.com/covers/blackout-front.jpg")
+        self.assertEqual(entries[0]["cover2_url"], "https://rarelust.com/covers/blackout-preview.jpg")
+        self.assertEqual(entries[0]["url"], url)
+        get.assert_called_once()
+
+    def test_conventional_archive_returns_movie_detail_links(self):
+        url = "https://rarelust.com/category/asian-classic-erotica-movies/page/2/"
+        html = """<html><body><article class="post"><h2 class="entry-title">
+          <a href="/movie-title-1987/">Movie Title (1987)</a></h2></article></body></html>"""
+        with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html, url)):
+            entries = scrape_category_entries(url)
+        self.assertEqual(len(entries), 1)
+        self.assertFalse(entries[0]["_inline_listing"])
+        self.assertEqual(entries[0]["url"], "https://rarelust.com/movie-title-1987")

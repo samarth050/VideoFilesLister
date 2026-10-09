@@ -163,7 +163,7 @@ from utils.helpers import (
     get_folder_size_bytes
 )
 
-from utils.movie_scraper import scrape_movie, scrape_category_urls
+from utils.movie_scraper import scrape_movie, scrape_category_urls, scrape_category_entries
 from videosnapper.tabs import VideoSnapperTabs
 from videosnapper.worker import generate_sheet
 
@@ -3992,7 +3992,8 @@ class FileListerApp:
 
     def _missing_online_worker(self, page_url, category_filter="All"):
         try:
-            urls = scrape_category_urls(page_url)
+            entries = scrape_category_entries(page_url)
+            urls = [entry.get("url", "") for entry in entries if entry.get("url")]
 
             conn = self.get_connection()
             cur = conn.cursor()
@@ -4031,11 +4032,12 @@ class FileListerApp:
             seen = set()
             added_names = set()
 
-            total = len(urls)
+            total = len(entries)
             # initialize progress bar on main thread
             self.root.after(0, lambda: self.missing_online_progress.configure(maximum=max(1, total), value=0))
 
-            for idx, url in enumerate(urls, start=1):
+            for idx, entry in enumerate(entries, start=1):
+                url = str(entry.get("url") or page_url)
                 # stop requested?
                 if getattr(self, "_missing_online_stop_event", None) and self._missing_online_stop_event.is_set():
                     # notify main thread to clean up
@@ -4043,6 +4045,13 @@ class FileListerApp:
                     return
 
                 normalized_url = url.strip().rstrip("/").lower()
+                if entry.get("_inline_listing"):
+                    record_key = (
+                        self.normalize_movie_compare_name(entry.get("name", "")),
+                        str(entry.get("year") or ""),
+                    )
+                else:
+                    record_key = normalized_url
 
                 # skip fragment links that point to page anchors/comments
                 if any(frag in normalized_url for frag in ("#comments", "#more", "#respond")):
@@ -4055,15 +4064,19 @@ class FileListerApp:
                     self.missing_online_progress.configure(value=i)
                 ))
 
-                if normalized_url in seen:
+                if record_key in seen:
                     continue
 
-                # Fetch movie details to get canonical name, year, and category
-                try:
-                    meta = scrape_movie(url)
-                except Exception:
-                    # If scraping fails, skip this URL
-                    continue
+                # Layout A already contains metadata in the archive body. Layout
+                # B uses its individual movie permalink and the existing detail scraper.
+                if entry.get("_inline_listing"):
+                    meta = entry
+                else:
+                    try:
+                        meta = scrape_movie(url)
+                    except Exception:
+                        # If scraping fails, skip this URL
+                        continue
 
                 # check stop again after network call
                 if getattr(self, "_missing_online_stop_event", None) and self._missing_online_stop_event.is_set():
@@ -4089,14 +4102,15 @@ class FileListerApp:
                     continue
 
                 # avoid listing same movie name multiple times when different URLs point to it
-                if norm_name in added_names:
-                    seen.add(normalized_url)
+                added_key = (norm_name, str(year or ""))
+                if added_key in added_names:
+                    seen.add(record_key)
                     continue
 
-                added_names.add(norm_name)
-                seen.add(normalized_url)
+                added_names.add(added_key)
+                seen.add(record_key)
 
-                exists_by_url = normalized_url in db_urls
+                exists_by_url = (not entry.get("_inline_listing") and normalized_url in db_urls)
                 exists_by_name_year = bool(year and (norm_name, str(year)) in db_name_years)
                 exists_by_name_without_year = bool(year and norm_name in db_names_without_year)
                 exists_by_name_only = not year and norm_name in db_names

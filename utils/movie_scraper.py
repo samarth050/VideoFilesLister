@@ -572,6 +572,158 @@ def _extract_name_year_from_url(url):
 
     return movie_name, year
 
+def _extract_rarelust_inline_listing(content, page_url, page_category=""):
+    """Extract movie records embedded directly in a Rarelust long-form page.
+
+    This handles pages such as /asian-movies/ where title/year, description,
+    cover images and file details are published in the page body rather than
+    on separate Rarelust movie-detail pages.
+    """
+    if content is None:
+        return None
+
+    blocks = []
+    for node in content.find_all(["p", "h2", "h3", "li", "figure"], recursive=True):
+        if node.find(["p", "h2", "h3", "li"], recursive=True):
+            continue
+        blocks.append(node)
+    if not blocks:
+        blocks = [node for node in content.find_all(recursive=False) if getattr(node, "name", None)]
+
+    # A title is normally the first text on a line and has a year in brackets.
+    title_pattern = re.compile(
+        r"^\s*(.{2,160}?)\s*[\(\[]((?:18|19|20)\d{2})[\)\]](?:\s|$|[/|–—-])",
+        re.S,
+    )
+    candidates = []
+    for idx, node in enumerate(blocks):
+        text = re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
+        match = title_pattern.match(text)
+        if not match:
+            continue
+        name = match.group(1).strip(" -–—|/")
+        if name.lower().startswith(("description", "starring", "cover", "preview", "download")):
+            continue
+        # The alternate/original title is commonly written after a slash.
+        name = re.split(r"\s*/\s*", name, maxsplit=1)[0].strip()
+        if name:
+            candidates.append((idx, name, match.group(2)))
+
+    # A normal archive has one title per post, not many records in one body.
+    if len(candidates) < 2:
+        return None
+
+    entries = []
+    for pos, (start_idx, name, year) in enumerate(candidates):
+        end_idx = candidates[pos + 1][0] if pos + 1 < len(candidates) else len(blocks)
+        group = blocks[start_idx:end_idx]
+        text_parts = [re.sub(r"\s+", " ", n.get_text(" ", strip=True)).strip() for n in group]
+        combined = " ".join(t for t in text_parts if t)
+        desc_match = re.search(
+            r"Description\s*:\s*(.*?)(?=\s+(?:cover|preview|dvdrip|webrip|vhsrip|brrip|bluray|download)\b|$)",
+            combined,
+            re.I,
+        )
+        description = desc_match.group(1).strip(" .:-") if desc_match else ""
+        image_urls = []
+        for node in group:
+            image_nodes = [node] if getattr(node, "name", None) == "img" else node.find_all("img")
+            for img in image_nodes:
+                src = img.get("data-src") or img.get("data-lazy-src") or img.get("data-original") or img.get("src")
+                if not src:
+                    continue
+                image_url = urljoin(page_url, src)
+                image_path = urlparse(image_url).path.lower()
+                if not image_path.endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                    continue
+                if any(x in image_path for x in ("logo", "avatar", "icon", "banner", "smilies")):
+                    continue
+                if image_url not in image_urls:
+                    image_urls.append(image_url)
+        size_info = extract_size_info(combined)
+        entries.append({
+            "name": name,
+            "year": year,
+            "category": page_category,
+            "url": page_url,
+            "size_text": size_info.get("size_text") or "",
+            "size_bytes": size_info.get("size_bytes"),
+            "description": description,
+            "cover1_url": image_urls[0] if image_urls else "",
+            "cover2_url": image_urls[1] if len(image_urls) > 1 else "",
+            "images": image_urls[:2],
+            "_inline_listing": True,
+        })
+    return entries
+
+
+def scrape_category_entries(category_url, timeout=15, max_pages=100):
+    """Read a Rarelust page using the appropriate layout strategy.
+
+    Inline listing pages are parsed directly. Conventional WordPress category
+    archives return individual movie permalinks for the existing detail scraper.
+    Archive pagination is followed, with same-host checks and deduplication.
+    """
+    start_url = (category_url or "").strip()
+    if not start_url:
+        return []
+    start_host = (urlparse(start_url).hostname or "").lower()
+    pending = [start_url]
+    visited = set()
+    seen = set()
+    entries = []
+
+    while pending and len(visited) < max(1, int(max_pages)):
+        page_url = pending.pop(0).split("#", 1)[0].rstrip("/")
+        if page_url in visited:
+            continue
+        visited.add(page_url)
+        response = SESSION.get(page_url, timeout=timeout)
+        response.raise_for_status()
+        actual_url = getattr(response, "url", None) or page_url
+        soup = BeautifulSoup(response.text, "html.parser")
+        content = soup.select_one(".entry-content, .post-content, main .content, main")
+        category_parts = []
+        for node in soup.select(".entry-meta a[rel='category tag'], .entry-meta a, .cat-links a"):
+            label = node.get_text(" ", strip=True)
+            if label and label.lower() not in {x.lower() for x in category_parts}:
+                category_parts.append(label)
+        page_category = ", ".join(category_parts)
+
+        inline_entries = _extract_rarelust_inline_listing(content, actual_url, page_category)
+        if inline_entries:
+            for entry in inline_entries:
+                key = (re.sub(r"[^a-z0-9]", "", entry["name"].lower()), entry["year"])
+                if key[0] and key not in seen:
+                    seen.add(key)
+                    entries.append(entry)
+        else:
+            # Conventional archive: collect same-site movie detail permalinks.
+            for anchor in soup.find_all("a", href=True):
+                href = urljoin(actual_url, anchor["href"]).split("#", 1)[0].rstrip("/")
+                parsed = urlparse(href)
+                if (parsed.hostname or "").lower() != start_host:
+                    continue
+                if not re.match(r"^/.+-\d{4}/?$", parsed.path):
+                    continue
+                key = href.lower()
+                if key not in seen:
+                    seen.add(key)
+                    entries.append({"url": href, "_inline_listing": False})
+
+        next_link = soup.select_one(
+            "a[rel='next'], .nav-links a.next, .pagination a.next, "
+            "a.next.page-numbers, a.page-numbers.next"
+        )
+        if next_link and next_link.get("href"):
+            next_url = urljoin(actual_url, next_link["href"]).split("#", 1)[0].rstrip("/")
+            parsed_next = urlparse(next_url)
+            if ((parsed_next.hostname or "").lower() == start_host
+                    and next_url not in visited and next_url not in pending):
+                pending.append(next_url)
+    return entries
+
+
 def scrape_category_urls(category_url, timeout=15):
     headers = {
         "User-Agent": "Mozilla/5.0"
