@@ -10,6 +10,7 @@ It is safe to import into FileLister.
 
 import re
 import json
+import os
 import requests
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
@@ -105,9 +106,27 @@ def scrape_movie(url, timeout=15):
     host = (urlparse(url).hostname or "").lower().removeprefix("www.")
     if host == "imdb.com" or host.endswith(".imdb.com"):
         return _scrape_imdb_movie(url, timeout)
+    if host == "themoviedb.org":
+        access_token = os.environ.get("TMDB_API_READ_ACCESS_TOKEN", "").strip()
+        if access_token:
+            return _scrape_tmdb_api(url, access_token, timeout)
 
     r = SESSION.get(url, timeout=timeout)
-    r.raise_for_status()
+    try:
+        r.raise_for_status()
+    except requests.HTTPError as exc:
+        if (
+            host == "themoviedb.org"
+            and exc.response is not None
+            and exc.response.status_code == 403
+        ):
+            raise requests.HTTPError(
+                "TMDB blocked the metadata request (HTTP 403). "
+                "Set TMDB_API_READ_ACCESS_TOKEN or use another metadata URL.",
+                request=exc.request,
+                response=exc.response,
+            ) from exc
+        raise
 
     soup = BeautifulSoup(r.text, "html.parser")
 
@@ -329,6 +348,60 @@ def _scrape_adultfilmdatabase_movie(url, soup):
         "category": category,
         "description": description,
         "images": images[:2],
+        "size_text": "",
+        "size_bytes": None,
+    }
+
+
+def _scrape_tmdb_api(url, access_token, timeout):
+    """Fetch TMDB metadata through its official API using a local access token."""
+    movie_match = re.search(r"/movie/(\d+)(?:[-/]|$)", urlparse(url).path)
+    if not movie_match:
+        raise ValueError("TMDB movie URL must contain a numeric movie ID.")
+
+    movie_id = movie_match.group(1)
+    response = SESSION.get(
+        f"https://api.themoviedb.org/3/movie/{movie_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={"language": "en-US"},
+        timeout=timeout,
+    )
+    if response.status_code in {401, 403}:
+        raise ValueError(
+            "TMDB API authorization failed. Check TMDB_API_READ_ACCESS_TOKEN."
+        )
+    if response.status_code == 404:
+        raise ValueError(f"TMDB movie ID {movie_id} was not found.")
+    response.raise_for_status()
+
+    movie = response.json()
+    if not isinstance(movie, dict):
+        raise ValueError(f"TMDB returned invalid metadata for movie ID {movie_id}.")
+
+    release_date = movie.get("release_date") or ""
+    year_match = re.match(r"\d{4}", release_date)
+    raw_genres = movie.get("genres")
+    genres = []
+    if isinstance(raw_genres, list):
+        genres = [
+            genre["name"].strip()
+            for genre in raw_genres
+            if isinstance(genre, dict)
+            and isinstance(genre.get("name"), str)
+            and genre["name"].strip()
+        ]
+    images = [
+        f"https://image.tmdb.org/t/p/original{image_path}"
+        for image_path in (movie.get("poster_path"), movie.get("backdrop_path"))
+        if isinstance(image_path, str) and image_path.startswith("/")
+    ]
+
+    return {
+        "name": movie.get("title") or movie.get("original_title") or "",
+        "year": year_match.group(0) if year_match else "",
+        "category": ", ".join(dict.fromkeys(genres)),
+        "description": (movie.get("overview") or "").strip(),
+        "images": images,
         "size_text": "",
         "size_bytes": None,
     }

@@ -1,6 +1,8 @@
 import unittest
 from unittest.mock import patch
 
+import requests
+
 from utils.movie_scraper import extract_size_info, scrape_movie
 
 
@@ -104,8 +106,9 @@ class MovieScraperCategoryTests(unittest.TestCase):
                 <img src="https://media.themoviedb.org/t/p/w533_and_h300_face/backdrop.jpg">
             </body></html>
         """
-        with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html)):
-            data = scrape_movie("https://www.themoviedb.org/movie/336543-femmes")
+        with patch.dict("os.environ", {"TMDB_API_READ_ACCESS_TOKEN": ""}):
+            with patch("utils.movie_scraper.SESSION.get", return_value=self._Response(html)):
+                data = scrape_movie("https://www.themoviedb.org/movie/336543-femmes")
 
         self.assertEqual(data["name"], "Femmes")
         self.assertEqual(data["year"], "1983")
@@ -115,6 +118,84 @@ class MovieScraperCategoryTests(unittest.TestCase):
             "https://image.tmdb.org/t/p/original/poster.jpg",
             "https://image.tmdb.org/t/p/original/backdrop.jpg",
         ])
+
+    def test_tmdb_forbidden_response_has_actionable_error(self):
+        class ForbiddenResponse:
+            status_code = 403
+
+            def raise_for_status(self):
+                raise requests.HTTPError(
+                    "403 Client Error: Forbidden", response=self
+                )
+
+        with patch.dict("os.environ", {"TMDB_API_READ_ACCESS_TOKEN": ""}):
+            with patch(
+                "utils.movie_scraper.SESSION.get", return_value=ForbiddenResponse()
+            ):
+                with self.assertRaisesRegex(
+                    requests.HTTPError, "TMDB blocked the metadata request"
+                ):
+                    scrape_movie(
+                        "https://www.themoviedb.org/movie/88983-mondo-cannibale"
+                    )
+
+    def test_tmdb_api_uses_local_read_access_token(self):
+        class ApiResponse:
+            status_code = 200
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return {
+                    "title": "Mondo Cannibale",
+                    "release_date": "2004-01-01",
+                    "genres": [{"name": "Horror"}, {"name": "Adventure"}],
+                    "overview": "A test synopsis.",
+                    "poster_path": "/poster.jpg",
+                    "backdrop_path": "/backdrop.jpg",
+                }
+
+        with patch.dict("os.environ", {"TMDB_API_READ_ACCESS_TOKEN": "local-token"}):
+            with patch(
+                "utils.movie_scraper.SESSION.get", return_value=ApiResponse()
+            ) as get:
+                data = scrape_movie(
+                    "https://www.themoviedb.org/movie/88983-mondo-cannibale"
+                )
+
+        self.assertEqual(data["name"], "Mondo Cannibale")
+        self.assertEqual(data["year"], "2004")
+        self.assertEqual(data["category"], "Horror, Adventure")
+        self.assertEqual(data["description"], "A test synopsis.")
+        self.assertEqual(data["images"], [
+            "https://image.tmdb.org/t/p/original/poster.jpg",
+            "https://image.tmdb.org/t/p/original/backdrop.jpg",
+        ])
+        get.assert_called_once_with(
+            "https://api.themoviedb.org/3/movie/88983",
+            headers={"Authorization": "Bearer local-token"},
+            params={"language": "en-US"},
+            timeout=15,
+        )
+
+    def test_tmdb_api_authorization_error_does_not_reveal_token(self):
+        class UnauthorizedResponse:
+            status_code = 401
+
+        with patch.dict(
+            "os.environ", {"TMDB_API_READ_ACCESS_TOKEN": "private-token"}
+        ):
+            with patch(
+                "utils.movie_scraper.SESSION.get",
+                return_value=UnauthorizedResponse(),
+            ):
+                with self.assertRaisesRegex(
+                    ValueError, "TMDB API authorization failed"
+                ) as error:
+                    scrape_movie("https://www.themoviedb.org/movie/88983")
+
+        self.assertNotIn("private-token", str(error.exception))
 
     def test_scrape_imdb_title_page(self):
         class GraphQLResponse:
