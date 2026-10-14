@@ -26,3 +26,7 @@ variable named `TMDB_API_READ_ACCESS_TOKEN` in Windows:
 The app reads the token when it starts and sends it to TMDB's official API.
 It is not stored in the app's settings. For more details, see
 [TMDB_API.md](./TMDB_API.md).
+
+When metadata is fetched from TMDB, FileLister generates Cover 2 from the
+attached video using the Contact Sheet feature's default 5-row by 3-column
+grid, rather than using TMDB's second artwork image.

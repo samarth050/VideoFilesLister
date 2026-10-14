@@ -18,7 +18,11 @@ import tkinter.font as tkfont
 
 from PIL import Image, ImageTk, ImageFont, ImageDraw, ImageOps
 
-from .worker import generate_sheet
+from .worker import (
+    DEFAULT_CONTACT_SHEET_COLS,
+    DEFAULT_CONTACT_SHEET_ROWS,
+    generate_sheet,
+)
 
 
 class VideoSnapperTabs:
@@ -32,8 +36,12 @@ class VideoSnapperTabs:
         settings = app.load_settings()
         self.video_var = tk.StringVar(value=settings.get("videosnapper_video", ""))
         self.output_var = tk.StringVar(value=settings.get("videosnapper_output_folder", ""))
-        self.rows_var = tk.IntVar(value=int(settings.get("videosnapper_rows", 5)))
-        self.cols_var = tk.IntVar(value=int(settings.get("videosnapper_cols", 3)))
+        self.rows_var = tk.IntVar(
+            value=int(settings.get("videosnapper_rows", DEFAULT_CONTACT_SHEET_ROWS))
+        )
+        self.cols_var = tk.IntVar(
+            value=int(settings.get("videosnapper_cols", DEFAULT_CONTACT_SHEET_COLS))
+        )
         self.format_var = tk.StringVar(value=settings.get("videosnapper_format", "JPEG"))
 
         self.preview_file = None

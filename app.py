@@ -165,7 +165,11 @@ from utils.helpers import (
 
 from utils.movie_scraper import scrape_movie, scrape_category_urls, scrape_category_entries
 from videosnapper.tabs import VideoSnapperTabs
-from videosnapper.worker import generate_sheet
+from videosnapper.worker import (
+    DEFAULT_CONTACT_SHEET_COLS,
+    DEFAULT_CONTACT_SHEET_ROWS,
+    generate_sheet,
+)
 
 class ExportDialog:
     def __init__(self, parent, options):
@@ -1003,10 +1007,12 @@ class FileListerApp:
         img2_path = self.get_cover_file_path(f"{file_id}_2.jpg")
         cover1_path = None
         cover2_path = None
+        host = (urlparse(url).hostname or "").lower().removeprefix("www.")
+        is_tmdb = host == "themoviedb.org"
 
         if len(images) > 0 and self.download_image(images[0], img1_path):
             cover1_path = self.make_cover_db_path(img1_path)
-        if len(images) > 1 and self.download_image(images[1], img2_path):
+        if not is_tmdb and len(images) > 1 and self.download_image(images[1], img2_path):
             cover2_path = self.make_cover_db_path(img2_path)
 
         conn = self.get_connection()
@@ -1054,7 +1060,10 @@ class FileListerApp:
 
     def _queue_auto_cover2_generation(self, file_id, url, data):
         host = (urlparse(url).hostname or "").lower().removeprefix("www.")
-        if host not in {"imdb.com", "themoviedb.org"} or len(data.get("images") or []) != 1:
+        is_tmdb = host == "themoviedb.org"
+        if not is_tmdb and (
+            host != "imdb.com" or len(data.get("images") or []) != 1
+        ):
             return
 
         conn = self.get_connection()
@@ -1074,7 +1083,7 @@ class FileListerApp:
         finally:
             conn.close()
 
-        if not row or not row[5] or row[6]:
+        if not row or not row[5] or (row[6] and not is_tmdb):
             return
 
         file_name, extension, size_bytes, storage_id, full_path = row[:5]
@@ -1086,30 +1095,38 @@ class FileListerApp:
         if video_path:
             self.root.after(
                 0,
-                lambda video_path=video_path: self._start_auto_cover2_generation(file_id, video_path)
+                lambda video_path=video_path: self._start_auto_cover2_generation(
+                    file_id, video_path, use_default_grid=is_tmdb
+                )
             )
 
-    def _start_auto_cover2_generation(self, file_id, video_path):
+    def _start_auto_cover2_generation(self, file_id, video_path, use_default_grid=False):
         if not os.path.isfile(video_path):
             return
 
-        try:
-            rows = max(1, min(20, int(self.videosnapper.rows_var.get())))
-            cols = max(1, min(20, int(self.videosnapper.cols_var.get())))
-        except (TypeError, ValueError) as exc:
-            self._auto_cover2_generation_failed(file_id, exc)
-            return
+        if use_default_grid:
+            rows = DEFAULT_CONTACT_SHEET_ROWS
+            cols = DEFAULT_CONTACT_SHEET_COLS
+        else:
+            try:
+                rows = max(1, min(20, int(self.videosnapper.rows_var.get())))
+                cols = max(1, min(20, int(self.videosnapper.cols_var.get())))
+            except (TypeError, ValueError) as exc:
+                self._auto_cover2_generation_failed(file_id, exc)
+                return
 
         output_file = tempfile.NamedTemporaryFile(
             suffix="_cover2.jpg", delete=False
         ).name
         threading.Thread(
             target=self._auto_cover2_generation_worker,
-            args=(file_id, video_path, output_file, rows, cols),
+            args=(file_id, video_path, output_file, rows, cols, use_default_grid),
             daemon=True,
         ).start()
 
-    def _auto_cover2_generation_worker(self, file_id, video_path, output_file, rows, cols):
+    def _auto_cover2_generation_worker(
+        self, file_id, video_path, output_file, rows, cols, replace_existing=False
+    ):
         try:
             generate_sheet(
                 video_path,
@@ -1121,7 +1138,9 @@ class FileListerApp:
             )
             self.root.after(
                 0,
-                lambda: self._persist_auto_generated_cover2(file_id, output_file)
+                lambda: self._persist_auto_generated_cover2(
+                    file_id, output_file, replace_existing=replace_existing
+                )
             )
         except Exception as exc:
             try:
@@ -1133,7 +1152,7 @@ class FileListerApp:
                 lambda exc=exc: self._auto_cover2_generation_failed(file_id, exc)
             )
 
-    def _persist_auto_generated_cover2(self, file_id, image_path):
+    def _persist_auto_generated_cover2(self, file_id, image_path, replace_existing=False):
         persisted = False
         try:
             conn = self.get_connection()
@@ -1144,16 +1163,21 @@ class FileListerApp:
                     (file_id,)
                 )
                 row = cur.fetchone()
-                if row and not row[0]:
+                if row and (replace_existing or not row[0]):
                     cover2_path = self.get_cover_file_path(f"{file_id}_2.jpg")
                     shutil.copy2(image_path, cover2_path)
                     cur.execute(
                         """
                         UPDATE MovieDetails
                         SET cover2_path=?
-                        WHERE file_id=? AND (cover2_path IS NULL OR cover2_path='')
+                        WHERE file_id=?
+                          AND (? OR cover2_path IS NULL OR cover2_path='')
                         """,
-                        (self.make_cover_db_path(cover2_path), file_id)
+                        (
+                            self.make_cover_db_path(cover2_path),
+                            file_id,
+                            replace_existing,
+                        )
                     )
                     persisted = cur.rowcount == 1
                     conn.commit()

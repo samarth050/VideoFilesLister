@@ -10,6 +10,9 @@ from .ffmpeg_utils import (
     get_video_info
 )
 
+DEFAULT_CONTACT_SHEET_ROWS = 5
+DEFAULT_CONTACT_SHEET_COLS = 3
+
 
 def generate_sheet(
         video_file,
